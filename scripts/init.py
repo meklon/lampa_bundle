@@ -7,7 +7,9 @@
   1. создаёт каталоги данных;
   2. ПРОВЕРЯЕТ, что жёсткая ссылка между торрентами и библиотекой реально
      создаётся, и валит развёртывание, если нет;
-  3. кладёт пароль qBittorrent в его конфиг.
+  3. кладёт пароль qBittorrent в его конфиг;
+  4. пишет конфигурацию Lampac — без неё он вяжется на 127.0.0.1 внутри
+     контейнера и снаружи недоступен, при этом выглядит здоровым.
 
 Ключи API сюда не попали намеренно: *arr принимают их переменными
 RADARR__AUTH__APIKEY и аналогами — проверено, работает даже без config.xml.
@@ -23,6 +25,7 @@ from pathlib import Path
 
 DATA = Path("/data")
 QBT_CONF = Path("/qbt-config/qBittorrent/qBittorrent.conf")
+LAMPAC_CONF = Path("/lampac-config/init.conf")
 
 
 def fail(message: str) -> None:
@@ -123,6 +126,36 @@ def seed_qbittorrent() -> None:
     print("     пароль qBittorrent записан")
 
 
+def seed_lampac() -> None:
+    """Конфигурация Lampac.
+
+    Без неё берётся base.conf из образа, где у listen НЕ ЗАДАН ip: сервис
+    вяжется на 127.0.0.1 внутри контейнера, проброс порта ведёт в никуда, а
+    healthcheck образа (pgrep dotnet) при этом рапортует healthy.
+
+    Пишется здесь, а не монтируется из репозитория: тогда для запуска нужен
+    был бы сам репозиторий, а это ровно то, от чего уходим.
+    """
+    if LAMPAC_CONF.exists():
+        print("     конфиг Lampac уже есть — не трогаю")
+        return
+    LAMPAC_CONF.parent.mkdir(parents=True, exist_ok=True)
+    LAMPAC_CONF.write_text(
+        "{\n"
+        '  "listen": {\n'
+        '    "ip": "0.0.0.0",\n'
+        '    "port": 9118,\n'
+        '    "scheme": "http"\n'
+        "  },\n"
+        '  "openstat": {\n'
+        '    "enable": false\n'
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    print("     конфиг Lampac записан")
+
+
 def fix_owner(paths: list[Path]) -> None:
     """Владелец каталогов должен совпадать с PUID/PGID сервисов.
 
@@ -130,7 +163,7 @@ def fix_owner(paths: list[Path]) -> None:
     от одного uid, *arr не может тронуть файл.
     """
     uid, gid = int(env("PUID")), int(env("PGID"))
-    for p in [*paths, QBT_CONF.parent, QBT_CONF]:
+    for p in [*paths, QBT_CONF.parent, QBT_CONF, LAMPAC_CONF]:
         if p.exists():
             try:
                 os.chown(p, uid, gid)
@@ -147,6 +180,9 @@ def main() -> None:
 
     print("==>  пароль qBittorrent")
     seed_qbittorrent()
+
+    print("==>  конфигурация Lampac")
+    seed_lampac()
 
     fix_owner(paths)
     print("==>  готово")

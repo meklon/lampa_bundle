@@ -11,12 +11,19 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-# shellcheck disable=SC1091
-set -a; . ./.env; set +a
+# .env создаётся человеком и в git не попадает, поэтому статически его не
+# прочитать. Директива стоит вплотную к самой команде подключения: применяется
+# она к СЛЕДУЮЩЕЙ команде, а в строке "set -a; . …; set +a" следующей была бы
+# "set -a" — предупреждение так и не гасилось.
+set -a
+# shellcheck source=/dev/null
+. ./.env
+set +a
 
 : "${DATA_ROOT:?не задан DATA_ROOT}"
 : "${RADARR_API_KEY:?не задан RADARR_API_KEY}"
-: "${TEST_RADARR_ROOT:?не задан TEST_RADARR_ROOT}"
+: "${MOVIES_PATH:?не задан MOVIES_PATH}"
+MEDIA_MOVIES="/data/${MOVIES_PATH}"
 : "${RADARR_PROFILE:?не задан RADARR_PROFILE}"
 
 RADARR="http://localhost:7878"
@@ -44,10 +51,13 @@ mkdir -p fixtures/data
 # под именем SxxEyy. Sonarr сопоставляет по имени, а не по содержимому,
 # так что импорт проверяется честно.
 #
-# Живёт ТОЛЬКО в выбрасываемом TEST_SONARR_ROOT.
+# Заказ помечается тегом из TEST_TAG — по нему стенд потом сносится одной
+# командой. Отдельных тестовых root folder больше нет, они убраны как лишняя
+# сущность.
 if [ "$WHICH" = series ]; then
   : "${SONARR_API_KEY:?не задан SONARR_API_KEY}"
-  : "${TEST_SONARR_ROOT:?не задан TEST_SONARR_ROOT}"
+  : "${TV_PATH:?не задан TV_PATH}"
+  MEDIA_TV="/data/${TV_PATH}"
   : "${SONARR_PROFILE:?не задан SONARR_PROFILE}"
   : "${TMDB_TOKEN:?нужен TMDB_TOKEN: Sonarr работает по TVDB, а перевод
      TMDB->TVDB делается только через TMDB. Лукап Radarr тут не заменяет}"
@@ -93,7 +103,7 @@ if [ "$WHICH" = series ]; then
     exit 1
   fi
   S_EXT="${SRC_FILE##*.}"
-  S_DEST="$DATA_ROOT/torrents/tv/$S_REL"
+  S_DEST="$DATA_ROOT/${TORRENTS_PATH}/tv/$S_REL"
   mkdir -p "$S_DEST"
   cp --update=none "$SRC_FILE" "$S_DEST/${S_REL}.${S_EXT}"
   chown -R "${PUID}:${PGID}" "$S_DEST"
@@ -124,7 +134,7 @@ if [ "$WHICH" = series ]; then
     # monitorNewItems="none" обязателен: по умолчанию "all", и тогда заказ
     # одного сезона превращается в подписку на сериал. seasonFolder по
     # умолчанию false, а docs/NAMING.md требует папки сезонов.
-    S_BODY="$(echo "$TPL" | jq --argjson p "$S_PROFILE" --arg root "$TEST_SONARR_ROOT" \
+    S_BODY="$(echo "$TPL" | jq --argjson p "$S_PROFILE" --arg root "$MEDIA_TV" \
       --argjson tag "$S_TAG" '.[0] + {
         qualityProfileId: $p,
         rootFolderPath:   $root,
@@ -135,7 +145,7 @@ if [ "$WHICH" = series ]; then
         addOptions: { searchForMissingEpisodes: false, searchForCutoffUnmetEpisodes: false }
       }')"
     s_post /series "$S_BODY" >/dev/null
-    echo "    добавлен в $TEST_SONARR_ROOT, monitorNewItems=none, seasonFolder=true"
+    echo "    добавлен в $MEDIA_TV, monitorNewItems=none, seasonFolder=true"
   fi
 
   # -------------------------------------------------------------------------
@@ -260,7 +270,7 @@ echo "==> раскладываю в торрент-каталог"
 # ---------------------------------------------------------------------------
 # Данные ложатся туда, куда указывает категория qBittorrent «radarr»,
 # поэтому торрент проверится как завершённый сразу.
-DEST_DIR="$DATA_ROOT/torrents/movies/$RELNAME"
+DEST_DIR="$DATA_ROOT/${TORRENTS_PATH}/movies/$RELNAME"
 mkdir -p "$DEST_DIR"
 cp -n "$SRC" "$DEST_DIR/${RELNAME}.${EXT}"
 chown -R "${PUID}:${PGID}" "$DEST_DIR"
@@ -301,7 +311,7 @@ else
   # Шаблон — объект от самого Radarr, а не собранный руками: состав полей
   # MovieResource по памяти не воспроизводится.
   BODY="$(r_get "/movie/lookup/tmdb?tmdbId=$TMDB_ID" | jq \
-    --argjson p "$PROFILE_ID" --arg root "$TEST_RADARR_ROOT" \
+    --argjson p "$PROFILE_ID" --arg root "$MEDIA_MOVIES" \
     --argjson tag "$TAG_ID" --arg ma "${RADARR_MIN_AVAILABILITY:-released}" '
       . + { qualityProfileId: $p,
             rootFolderPath:   $root,
@@ -313,7 +323,7 @@ else
             addOptions: { searchForMovie: false } }')"
 
   r_post /movie "$BODY" >/dev/null
-  echo "    добавлен в $TEST_RADARR_ROOT, профиль $RADARR_PROFILE, тег ${TEST_TAG:-test}"
+  echo "    добавлен в $MEDIA_MOVIES, профиль $RADARR_PROFILE, тег ${TEST_TAG:-test}"
 fi
 
 # ---------------------------------------------------------------------------

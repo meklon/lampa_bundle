@@ -13,10 +13,10 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
 from .config import settings
@@ -50,22 +50,80 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="bridge", lifespan=lifespan)
 
-# CORS нужен ВСЕГДА, а не только в dev.
-#
-# Прежде здесь стояло `if settings().is_dev` с обоснованием «плагин отдаётся с
-# того же origin, что и API». Обоснование неверно: CORS определяется origin
-# СТРАНИЦЫ, а не origin скрипта. Плагин исполняется внутри страницы Lampa
-# (Lampac на :9118), и его запрос к bridge (:8000) — кросс-доменный, сколько
-# бы файл плагина ни отдавался с bridge. В production заголовка не получал
-# никто, и каждый заказ падал бы с «bridge недоступен».
-#
-# Список явный, из CORS_ORIGINS. НИКОГДА "*" — запрещённая подмена.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings().cors_origin_list,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
-)
+
+def _host_of(value: str) -> str:
+    """Хост без порта. Понимает IPv6 в скобках: [::1]:8000."""
+    value = value.strip()
+    if value.startswith("["):
+        end = value.find("]")
+        return value[: end + 1] if end != -1 else value
+    return value.rsplit(":", 1)[0] if ":" in value else value
+
+
+def cors_allowed(origin: str, host_header: str) -> bool:
+    """Можно ли этой странице делать запросы к bridge.
+
+    Два правила.
+
+    1. Явный список из CORS_ORIGINS — для случаев, которые автоматикой не
+       покрыть: Lampac на другой машине, обратный прокси со своим доменом,
+       упакованный вебвью с origin "null".
+
+    2. Тот же хост, любой порт — вычисляется само. Обычная установка: страницу
+       Lampa отдаёт Lampac с того же адреса, что и bridge, только порт другой.
+
+    Почему второе правило безопасно: чтобы под него попасть, страница должна
+    отдаваться ТОЙ ЖЕ машиной, что и bridge. Чужой сайт из интернета под него
+    не подпадает — origin проставляет браузер, подделать его страница не может.
+    Это принципиально не то же, что "*", который пускает вообще всех.
+
+    Почему нельзя вычислить адрес заранее: bridge живёт в контейнере и знает
+    только свой адрес в сети compose (172.18.x.x). По какому адресу человек
+    откроет Lampa — IP, имя хоста, localhost, домен за прокси — известно лишь
+    из заголовка Host конкретного запроса.
+    """
+    if not origin:
+        return False
+    if origin in settings().cors_origin_list:
+        return True
+    if not host_header:
+        return False
+
+    parsed = urlsplit(origin)
+    if not parsed.hostname:
+        # origin вроде "null" — хоста нет, сравнивать не с чем. Разрешается
+        # только явным перечислением выше.
+        return False
+    return parsed.hostname == _host_of(host_header).strip("[]")
+
+
+@app.middleware("http")
+async def cors(request: Request, call_next):
+    """CORS своими руками: штатный middleware не умеет решать по запросу.
+
+    Ему нужен статический список origin, а наше правило зависит от заголовка
+    Host — то есть от того, по какому адресу обратились именно сейчас.
+
+    Заголовок отдаётся с КОНКРЕТНЫМ origin, никогда со "*".
+    """
+    origin = request.headers.get("origin", "")
+    allowed = cors_allowed(origin, request.headers.get("host", ""))
+
+    if request.method == "OPTIONS" and request.headers.get("access-control-request-method"):
+        # Preflight. Без разрешения браузер не отправит настоящий запрос —
+        # именно этим CORS и защищает: чужая страница не сможет сделать заказ.
+        response = Response(status_code=200 if allowed else 403)
+    else:
+        response = await call_next(request)
+
+    if allowed:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["Access-Control-Max-Age"] = "600"
+    # Ответ зависит от origin, поэтому кеши обязаны это учитывать.
+    response.headers["Vary"] = "Origin"
+    return response
 
 
 @app.middleware("http")
