@@ -5,6 +5,14 @@
 # КРИТИЧНО: у всех сервисов ОДНО монтирование ${DATA_ROOT}:/data.
 # Не разделять на /downloads и /movies — сломаются жёсткие ссылки.
 
+# Ротация логов. Драйвер json-file по умолчанию растёт без предела и однажды
+# съедает диск — на домашнем сервере это обнаруживается по полному разделу.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:${QBITTORRENT_TAG}
@@ -23,6 +31,16 @@ services:
       - "8081:8081"
       - "6881:6881"
       - "6881:6881/udp"
+    healthcheck:
+      # Веб-интерфейс отвечает 200 без авторизации. Проверяем ЕГО, а не
+      # наличие процесса: у Lampac штатный healthcheck делает pgrep dotnet и
+      # рапортует healthy при неотвечающем порте — мы это уже ловили.
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8081/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    logging: *logging
     restart: unless-stopped
 
   prowlarr:
@@ -37,6 +55,13 @@ services:
       - ./config/prowlarr:/config
     ports:
       - "9696:9696"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:9696/ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    logging: *logging
     restart: unless-stopped
 
   radarr:
@@ -54,6 +79,14 @@ services:
       - "7878:7878"
     depends_on:
       - qbittorrent
+    healthcheck:
+      # /ping отвечает 200 без ключа API — проверено.
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:7878/ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    logging: *logging
     restart: unless-stopped
 
   sonarr:
@@ -71,6 +104,13 @@ services:
       - "8989:8989"
     depends_on:
       - qbittorrent
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8989/ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    logging: *logging
     restart: unless-stopped
 
   bridge:
@@ -80,12 +120,12 @@ services:
       - BRIDGE_ENV=${BRIDGE_ENV}
       - RADARR_URL=http://radarr:7878
       - RADARR_API_KEY=${RADARR_API_KEY}
-      - RADARR_ROOT=${RADARR_ROOT}
+      - RADARR_ROOT=/data/${MOVIES_PATH}
       - RADARR_PROFILE=${RADARR_PROFILE}
       - RADARR_MIN_AVAILABILITY=${RADARR_MIN_AVAILABILITY}
       - SONARR_URL=http://sonarr:8989
       - SONARR_API_KEY=${SONARR_API_KEY}
-      - SONARR_ROOT=${SONARR_ROOT}
+      - SONARR_ROOT=/data/${TV_PATH}
       - SONARR_PROFILE=${SONARR_PROFILE}
       - TMDB_TOKEN=${TMDB_TOKEN}
       # Страница Lampa приходит с Lampac (:9118), bridge живёт на :8000 —
@@ -94,13 +134,24 @@ services:
       # В dev-режиме заказы идут в тестовые root folder и метятся тегом:
       # отладочный цикл не должен засорять настоящую библиотеку.
       - TEST_TAG=${TEST_TAG}
-      - TEST_RADARR_ROOT=${TEST_RADARR_ROOT}
-      - TEST_SONARR_ROOT=${TEST_SONARR_ROOT}
+      - TEST_RADARR_ROOT=/data/${TEST_MOVIES_PATH}
+      - TEST_SONARR_ROOT=/data/${TEST_TV_PATH}
     ports:
       - "8000:8000"
     depends_on:
-      - radarr
-      - sonarr
+      radarr:
+        condition: service_healthy
+      sonarr:
+        condition: service_healthy
+    healthcheck:
+      # В python:3.12-slim нет ни curl, ни wget — проверяем средствами самого
+      # интерпретатора.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=5).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging: *logging
     restart: unless-stopped
 
   # Раскомментировать, только если конкретный трекер требует обхода Cloudflare.
@@ -141,4 +192,52 @@ services:
     # Задано вслед за официальным compose проекта: парсерам нужна разделяемая
     # память, с умолчанием в 64 МБ они падают.
     shm_size: 1024mb
+    healthcheck:
+      # Переопределяет healthcheck образа (pgrep -x dotnet). Тот показывал
+      # healthy, когда сервис вязался на 127.0.0.1 и снаружи не отвечал.
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:9118/"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    logging: *logging
     restart: unless-stopped
+
+  # Провижининг как часть стека, а не отдельный шаг руками.
+  #
+  # Запускается при каждом `compose up`, дожидаясь готовности всех, кого
+  # настраивает. Это безопасно и полезно: скрипты идемпотентны (проверено),
+  # поэтому повторный запуск не создаёт дубликатов, зато исправляет ручные
+  # правки, которые кто-то сделал через веб-морду. Конфигурация возвращается
+  # к описанной в репозитории.
+  #
+  # restart: no — сервис одноразовый: отработал и вышел. Ненулевой код виден
+  # в `compose ps` и в логах, то есть сломанная настройка не проходит молча.
+  provision:
+    image: alpine:3
+    container_name: provision
+    depends_on:
+      qbittorrent:
+        condition: service_healthy
+      prowlarr:
+        condition: service_healthy
+      radarr:
+        condition: service_healthy
+      sonarr:
+        condition: service_healthy
+    volumes:
+      # Только чтение: провижининг ничего в репозитории не меняет.
+      - .:/repo:ro
+    working_dir: /repo
+    environment:
+      # Внутри compose-сети адреса другие: localhost указывал бы на сам
+      # контейнер провижининга.
+      - RADARR_BASE=http://radarr:7878
+      - SONARR_BASE=http://sonarr:8989
+      - PROWLARR_BASE=http://prowlarr:9696
+      - QBT_BASE=http://qbittorrent:8081
+    command: >
+      sh -c "apk add --no-cache bash curl jq >/dev/null 2>&1 &&
+             bash ./provision/provision.sh"
+    restart: "no"
+    logging: *logging

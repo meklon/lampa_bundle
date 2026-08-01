@@ -93,18 +93,40 @@ Radarr/Sonarr → Kodi (вне скоупа)          скан библиоте�
 ## 1.6 Раскладка файловой системы
 
 ```
-${DATA_ROOT}
-├── torrents
-│   ├── movies          категория qBittorrent "radarr"
-│   └── tv              категория qBittorrent "sonarr"
-└── media
-    ├── movies          root folder Radarr
-    ├── tv              root folder Sonarr
-    ├── _test_movies    тестовый root folder, выбрасывается
-    └── _test_tv        тестовый root folder, выбрасывается
+${DATA_ROOT}                      единственное монтирование -> /data
+├── ${TORRENTS_PATH}
+│   ├── movies                    категория qBittorrent "radarr"
+│   └── tv                        категория qBittorrent "sonarr"
+├── ${MOVIES_PATH}                root folder Radarr
+├── ${TV_PATH}                    root folder Sonarr
+├── ${TEST_MOVIES_PATH}           тестовый root folder, выбрасывается
+└── ${TEST_TV_PATH}               тестовый root folder, выбрасывается
 ```
 
+Пути настраиваются в `.env` и задаются **относительно** `DATA_ROOT`. По
+умолчанию `torrents`, `media/movies`, `media/tv`; можно указать на уже
+существующие каталоги вроде `Movies` и `TV shows`.
+
 **Все контейнеры получают одно монтирование: `${DATA_ROOT}:/data`.**
+
+### Почему пути обязаны оставаться внутри одного монтирования
+
+Раздельные bind-монтирования ломают жёсткие ссылки **даже когда обе точки
+лежат на одной файловой системе**. Проверено:
+
+```
+docker run -v $PWD/dl:/downloads -v $PWD/lib:/movies alpine
+  устройство /downloads: 43
+  устройство /movies:    43
+  ln /downloads/f /movies/f  ->  EXDEV
+```
+
+Ядро сверяет точку монтирования, а не только суперблок.
+
+**Отсюда важное следствие: сравнения `stat -c %d` недостаточно.** Номера
+устройств совпали, а ссылка не создалась. Поэтому и `scripts/init-data.sh`, и
+`checks/02-data-layout.sh` после сравнения устройств делают **пробу настоящей
+ссылкой** — она и есть решающая.
 
 `DATA_ROOT` находится **вне репозитория**. Если положить его внутрь, он
 окажется на той же ФС, что и остальное, и проверка жёстких ссылок перестанет

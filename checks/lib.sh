@@ -21,6 +21,12 @@ PROWLARR="http://localhost:9696"
 QBT="http://localhost:8081"
 BRIDGE="http://localhost:8000"
 
+# Пути ВНУТРИ контейнеров. Единственное монтирование ${DATA_ROOT}:/data,
+# остальное — относительные пути из .env.
+C_TORRENTS="/data/${TORRENTS_PATH}"
+C_MOVIES="/data/${MOVIES_PATH}"
+C_TV="/data/${TV_PATH}"
+
 FAILED=0
 
 ok()   { printf '  [ok]   %s\n' "$*"; }
