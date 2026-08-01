@@ -10,6 +10,7 @@ import httpx
 
 from .config import settings
 from .errors import (
+    ProfileNotAllowed,
     ProfileNotFound,
     RootFolderNotFound,
     UpstreamAuth,
@@ -43,6 +44,33 @@ class Radarr:
         return r
 
     # -- разрешение параметров ------------------------------------------------
+
+    async def profiles(self) -> list[str]:
+        """Имена профилей качества — для выбора в плагине.
+
+        Список берётся у самого Radarr, а не задаётся в коде: профили может
+        добавить и переименовать человек, и захардкоженный перечень разъехался
+        бы с действительностью молча.
+        """
+        r = await self._request("GET", "/qualityprofile")
+        if r.status_code >= 400:
+            raise UpstreamUnavailable(f"Radarr /qualityprofile вернул {r.status_code}")
+        return [str(p["name"]) for p in r.json()]
+
+    async def resolve_profile(self, requested: str | None) -> str:
+        """Имя профиля для заказа: из запроса, иначе умолчание из окружения.
+
+        Профиль из запроса — пользовательский ввод, поэтому проверяется по
+        списку и при промахе даёт 422, а не 500.
+        """
+        if requested is None:
+            return self._s.radarr_profile
+        available = await self.profiles()
+        if requested not in available:
+            raise ProfileNotAllowed(
+                f"профиля «{requested}» нет в Radarr; есть: {', '.join(available)}"
+            )
+        return requested
 
     async def profile_id(self, name: str) -> int:
         r = await self._request("GET", "/qualityprofile")
@@ -156,8 +184,8 @@ class Radarr:
             payload["tags"] = tags
         return payload
 
-    async def add_movie(self, tmdb_id: int, search: bool) -> dict:
-        profile = await self.profile_id(self._s.radarr_profile)
+    async def add_movie(self, tmdb_id: int, search: bool, profile_name: str | None = None) -> dict:
+        profile = await self.profile_id(profile_name or self._s.radarr_profile)
         # В dev — выбрасываемый тестовый каталог, а не настоящая библиотека.
         root = await self.root_folder(self._s.radarr_root_effective)
 

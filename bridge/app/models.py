@@ -9,6 +9,10 @@ class OrderRequest(BaseModel):
     tmdb_id: int = Field(gt=0, description="Идентификатор TMDB из карточки Lampa")
     type: Literal["movie", "tv"]
     season: int | None = Field(default=None, ge=0)
+    # Имя профиля качества, а не разрешение: в *arr разрешение не параметр
+    # загрузки, а часть профиля, который заодно задаёт границу апгрейдов.
+    # Необязательное — без него берётся умолчание из окружения.
+    profile: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def check_season(self) -> Self:
@@ -28,3 +32,11 @@ class OrderResponse(BaseModel):
     # Показывается пользователю в интерфейсе Lampa КАК ЕСТЬ.
     # Человекочитаемо, по-русски.
     detail: str | None = None
+
+
+class Profile(BaseModel):
+    """Профиль качества для выбора в плагине."""
+
+    name: str
+    # Умолчание из окружения — плагин ставит его первым в списке.
+    default: bool = False

@@ -19,6 +19,7 @@ import httpx
 
 from .config import settings
 from .errors import (
+    ProfileNotAllowed,
     ProfileNotFound,
     RootFolderNotFound,
     SeasonOutOfRange,
@@ -53,6 +54,23 @@ class Sonarr:
         return r
 
     # -- разрешение параметров ------------------------------------------------
+
+    async def profiles(self) -> list[str]:
+        """Имена профилей качества — для выбора в плагине. См. Radarr.profiles."""
+        r = await self._request("GET", "/qualityprofile")
+        if r.status_code >= 400:
+            raise UpstreamUnavailable(f"Sonarr /qualityprofile вернул {r.status_code}")
+        return [str(p["name"]) for p in r.json()]
+
+    async def resolve_profile(self, requested: str | None) -> str:
+        if requested is None:
+            return self._s.sonarr_profile
+        available = await self.profiles()
+        if requested not in available:
+            raise ProfileNotAllowed(
+                f"профиля «{requested}» нет в Sonarr; есть: {', '.join(available)}"
+            )
+        return requested
 
     async def profile_id(self, name: str) -> int:
         r = await self._request("GET", "/qualityprofile")
@@ -170,9 +188,9 @@ class Sonarr:
             payload["tags"] = tags
         return payload
 
-    async def add_series(self, tvdb_id: int) -> dict:
+    async def add_series(self, tvdb_id: int, profile_name: str | None = None) -> dict:
         """Добавляет сериал БЕЗ мониторинга сезонов."""
-        profile = await self.profile_id(self._s.sonarr_profile)
+        profile = await self.profile_id(profile_name or self._s.sonarr_profile)
         # В dev — выбрасываемый тестовый каталог, а не настоящая библиотека.
         root = await self.root_folder(self._s.sonarr_root_effective)
 

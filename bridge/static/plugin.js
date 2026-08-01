@@ -1,9 +1,12 @@
 /*
  * plugin.js — плагин Lampa. Кнопка «Заказать» в карточке.
  *
- * ТОНКИЙ НАМЕРЕННО. Прочитал id, спросил сезон, отправил один запрос,
- * показал уведомление. Ни ретраев, ни хранения, ни опроса статуса,
+ * ТОНКИЙ НАМЕРЕННО. Прочитал id, спросил сезон и качество, отправил один
+ * запрос, показал уведомление. Ни ретраев, ни хранения, ни опроса статуса,
  * ни знания об *arr.
+ *
+ * Список профилей качества плагин НЕ знает — забирает у bridge. Иначе
+ * переименованный в Radarr профиль сломал бы заказ, и молча.
  *
  * Причина: внутренности Lampa меняются, плагины при обновлениях отваливаются.
  * В плагине должно быть нечего ломать. Вся хрупкая логика — в bridge, где
@@ -71,6 +74,7 @@
   })();
 
   var ORDER_PATH = '/order';
+  var PROFILES_PATH = '/profiles';
 
   // -------------------------------------------------------------------------
   // Чтение карточки
@@ -148,6 +152,54 @@
     else root.find('.full-start-new__buttons').append(btn);
   }
 
+  function pickQuality(card, callback) {
+    // Список профилей берётся у bridge, а не зашит здесь: профили заводит и
+    // переименовывает человек в Radarr/Sonarr, и зашитый перечень разъехался
+    // бы с действительностью молча.
+    //
+    // Разрешение — не отдельный параметр: в *arr оно часть профиля, который
+    // заодно задаёт, до чего файл потом апгрейдится.
+    fetch(BRIDGE + PROFILES_PATH + '?type=' + encodeURIComponent(card.type))
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (list) {
+        if (!Array.isArray(list) || !list.length) {
+          // Профилей не видно — заказываем с умолчанием bridge, а не срываем
+          // заказ: без поля profile он подставит значение из окружения.
+          callback(null);
+          return;
+        }
+
+        // Умолчание первым: чаще всего выбирают именно его.
+        list.sort(function (a, b) {
+          return (b.default ? 1 : 0) - (a.default ? 1 : 0);
+        });
+
+        var back = Lampa.Controller.enabled().name;
+        Lampa.Select.show({
+          title: 'Качество',
+          items: list.map(function (p) {
+            return {
+              title: p.default ? p.name + ' (по умолчанию)' : p.name,
+              profile: p.name
+            };
+          }),
+          onSelect: function (item) {
+            Lampa.Controller.toggle(back);
+            callback(item.profile);
+          },
+          onBack: function () {
+            Lampa.Controller.toggle(back);
+          }
+        });
+      })
+      .catch(function () {
+        // Не достучались до списка — не мешаем заказу, идём с умолчанием.
+        callback(null);
+      });
+  }
+
   function pickSeason(card, callback) {
     if (!card.seasons.length) {
       // Сезонов в данных нет — не выдумываем номер, говорим прямо.
@@ -205,17 +257,31 @@
   }
 
   function handleOrder(card) {
-    function fire(season) {
+    function fire(season, profile) {
       notify('Отправляю: ' + card.title);
-      sendOrder({ tmdb_id: card.tmdb_id, type: card.type, season: season }, function (err, message) {
+      var body = { tmdb_id: card.tmdb_id, type: card.type, season: season };
+      // profile необязателен: без него bridge берёт умолчание из окружения.
+      // Не отправляем null, чтобы не путать «не выбрано» с «выбрано пусто».
+      if (profile) body.profile = profile;
+      sendOrder(body, function (err, message) {
         // detail из ответа bridge показывается КАК ЕСТЬ: он человекочитаемый
         // и по-русски, это часть контракта (docs/SPEC.md 2.3).
         notify(err ? err.message : message);
       });
     }
 
-    if (card.type === 'tv') pickSeason(card, fire);
-    else fire(null);
+    // Порядок вопросов: сначала «что» (сезон), потом «как» (качество).
+    if (card.type === 'tv') {
+      pickSeason(card, function (season) {
+        pickQuality(card, function (profile) {
+          fire(season, profile);
+        });
+      });
+    } else {
+      pickQuality(card, function (profile) {
+        fire(null, profile);
+      });
+    }
   }
 
   // -------------------------------------------------------------------------

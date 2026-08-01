@@ -284,3 +284,46 @@ def test_seasonpass_rejects_unknown_season():
 
     with pytest.raises(SeasonOutOfRange):
         _sonarr()._build_seasonpass_payload(_series_stub(), season=99)
+
+
+# ---------------------------------------------------------------------------
+# Выбор профиля качества
+# ---------------------------------------------------------------------------
+
+
+def test_order_accepts_profile():
+    """Профиль — необязательное поле контракта."""
+    from app.models import OrderRequest
+
+    r = OrderRequest(tmdb_id=550, type="movie", profile="Ultra-HD")
+    assert r.profile == "Ultra-HD"
+
+
+def test_order_without_profile_is_valid():
+    """Без профиля bridge подставляет умолчание из окружения."""
+    from app.models import OrderRequest
+
+    assert OrderRequest(tmdb_id=550, type="movie").profile is None
+
+
+def test_empty_profile_rejected():
+    """Пустая строка — не «не выбрано», а мусор."""
+    from pydantic import ValidationError as PydanticValidationError
+
+    from app.models import OrderRequest
+
+    with pytest.raises(PydanticValidationError):
+        OrderRequest(tmdb_id=550, type="movie", profile="")
+
+
+def test_unknown_profile_is_422_not_500():
+    """Профиль из запроса — пользовательский ввод.
+
+    Несуществующий должен давать 422 с внятным текстом, а не «внутреннюю
+    ошибку»: запрос корректен по форме, просто просит то, чего нет.
+    """
+    from app.errors import ProfileNotAllowed, ProfileNotFound
+
+    assert ProfileNotAllowed.status_code == 422
+    # Профиль из ОКРУЖЕНИЯ — другое дело: это поломка настройки.
+    assert ProfileNotFound.status_code == 500
