@@ -1,0 +1,35 @@
+# Секреты
+.env
+*.key
+*.pem
+
+# Конфигурация *arr: SQLite внутри томов.
+# Git — про развёртывание, не про бэкап.
+# Бэкап: плановый внутри Radarr/Sonarr + BT_backup qBittorrent, отдельно.
+config/
+
+# Бинарники тестового стенда. Воссоздаются make-fixture.sh
+fixtures/data/
+fixtures/*.torrent
+
+# Данные вне репозитория, но подстрахуемся от случайного симлинка
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Node (локальная сборка lampa-source для отладки плагина)
+node_modules/
+
+# Редакторы и ОС
+.vscode/
+.idea/
+.DS_Store
+*.swp
