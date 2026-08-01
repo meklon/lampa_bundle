@@ -3,11 +3,14 @@ FROM python:3.12-slim
 WORKDIR /app
 
 COPY pyproject.toml ./
-RUN pip install --no-cache-dir -e . 2>/dev/null || pip install --no-cache-dir \
-      "fastapi>=0.115" "uvicorn[standard]>=0.32" "httpx>=0.27" \
-      "pydantic>=2.9" "pydantic-settings>=2.5"
-
 COPY app ./app
+# Без запасного варианта намеренно. Прежняя строка выглядела так:
+#   pip install -e . 2>/dev/null || pip install fastapi ... httpx ...
+# и глушила ошибку сборки: установка молча уходила на второй, захардкоженный
+# список версий, а pyproject.toml не участвовал. Собиралось, но не то.
+# Сломанная сборка обязана падать, а не подменяться.
+RUN pip install --no-cache-dir .
+
 COPY static ./static
 
 EXPOSE 8000

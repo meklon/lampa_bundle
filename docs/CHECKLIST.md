@@ -204,15 +204,27 @@ Prowlarr 2.5.2.5491.
 
 Ветка `stage/5-bridge`. TDD: тесты на записанных ответах API, без сети.
 
-- [!] Б1: без токена TMDB трансляция TMDB→TVDB не работает
-- [ ] `bridge/app/radarr.py` — тело `POST /api/v3/movie` по схеме `MovieResource` из `openapi/`
-- [ ] `bridge/app/sonarr.py` — `_build_add_payload` по `SeriesResource` / `AddSeriesOptions`
-- [ ] `bridge/app/sonarr.py` — `_build_seasonpass_payload` по `SeasonPassResource`
-- [ ] Закрыт открытый вопрос №1: один POST с массивом `seasons` или два шага через `seasonpass`. Ответ из схемы и логов Sonarr, не из догадки
-- [ ] `pytest` в `bridge/tests/` зелёный
-- [ ] **`checks/05-bridge-movie.sh` прошла** — `status: "queued"`, фильм в Radarr с ожидаемыми профилем, root folder и `minimumAvailability`; **в dev-режиме очередь и история пусты**; повторный заказ даёт `status: "exists"` и это успех
-- [ ] **`checks/06-bridge-season.sh` прошла** — сериал с ожидаемым `tvdbId`, **ровно один сезон** `monitored: true`, **`monitorNewItems` равно `"none"`**, поиск не запущен
-- [ ] Отчёт `reports/stage-5-bridge.md`
+- [x] `bridge/app/radarr.py` — тело `POST /api/v3/movie` по схеме `MovieResource`
+- [x] `bridge/app/sonarr.py` — `_build_add_payload` по `SeriesResource` / `AddSeriesOptions`
+- [x] `bridge/app/sonarr.py` — `_build_seasonpass_payload` по `SeasonPassResource`
+- [x] **Открытый вопрос №1 закрыт опытом**, а не догадкой: один POST не работает. `addOptions.monitor` затирает флаги после добавления, **а ответ POST этого не показывает** — возвращает `monitored: true` при `false` в базе. `monitoringOptions` в seasonpass — тот же капкан: и `none`, и `skip` снимают мониторинг со всех сезонов. Объект не передаётся вовсе
+- [x] `pytest` зелёный: 37 тестов, сеть не нужна. Имена полей сверяются **против схемы из `openapi/`**, а не против списка в тесте
+- [x] **`checks/05-bridge-movie.sh` прошла** (Sintel, `tmdb_id=45745`) — `queued`, root folder `_test_movies`, `minimumAvailability=released`, очередь и история пусты, повторный заказ даёт `exists`
+- [x] **`checks/06-bridge-season.sh` прошла** (Death's Game, сезон 1) — `monitorNewItems=none`, ровно один сезон, поиск не запущен, дублей нет
+- [x] Сверх состава проверок: многосезонный случай (сезон 2 у Breaking Bad из шести — отслеживается ровно `[2]`), сериал без `tvdb_id` → 422 с внятным текстом, несуществующий сезон → 422 с перечислением
+- [x] Отчёт `reports/stage-5-bridge.md`
+
+**Три находки этапа.** `title` обязателен в обоих *arr, хотя схема помечает его
+`nullable` и списка `required` не имеет — без него 500 с исключением внутри
+построителя пути. Второй случай после `colonReplacementFormat`, где схема
+неполна: она источник истины по именам, но не по обязательности.
+
+`TEST_RADARR_ROOT` не передавался в bridge — отладочные заказы шли бы в
+настоящую библиотеку против `CLAUDE.md`. Добавлены эффективные root folder и
+проброс в compose.
+
+`pip install -e .` в контейнере падал, а `Dockerfile` глушил ошибку через
+`2>/dev/null ||` и ставил захардкоженный список версий мимо `pyproject.toml`.
 
 Имена полей только из `openapi/`. Поля нет в схеме — стоп-условие №1, а не
 подстановка имени «по смыслу».

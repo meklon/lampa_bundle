@@ -18,6 +18,7 @@ from .config import settings
 from .errors import (
     ProfileNotFound,
     RootFolderNotFound,
+    SeasonOutOfRange,
     UpstreamAuth,
     UpstreamUnavailable,
 )
@@ -79,41 +80,102 @@ class Sonarr:
 
     # -- добавление ----------------------------------------------------------
 
-    def _build_add_payload(self, tvdb_id: int, profile_id: int, root: str) -> dict:
+    async def tag_id(self, label: str) -> int:
+        """Идентификатор тега по метке, с созданием при отсутствии."""
+        r = await self._request("GET", "/tag")
+        if r.status_code >= 400:
+            raise UpstreamUnavailable(f"Sonarr /tag вернул {r.status_code}")
+        for t in r.json():
+            if t.get("label") == label:
+                return int(t["id"])
+        created = await self._request("POST", "/tag", json={"label": label})
+        if created.status_code >= 400:
+            raise UpstreamUnavailable(f"Sonarr отказал при создании тега: {created.status_code}")
+        return int(created.json()["id"])
+
+    async def lookup_title(self, tvdb_id: int) -> str:
+        """Название по ТОЧНОМУ tvdbId из собственных метаданных Sonarr.
+
+        Нужно по той же причине, что и у Radarr: путь папки строится в момент
+        добавления по `seriesFolderFormat`, и без `title` Sonarr отвечает 500 с
+        `ArgumentNullException` из регулярного выражения. См. docs/SPEC.md 2.5.
+
+        `term=tvdb:<id>` — это поиск по идентификатору. Запрет из CLAUDE.md
+        касается `term=<название>`: там нечёткое совпадение притащило бы не тот
+        сериал. Здесь идентификатор уже получен от TMDB, и результат
+        проверяется на единственность.
+        """
+        r = await self._request("GET", f"/series/lookup?term=tvdb:{tvdb_id}")
+        if r.status_code >= 400:
+            raise UpstreamUnavailable(f"Sonarr /series/lookup вернул {r.status_code}")
+        found = r.json() or []
+        if len(found) != 1:
+            raise UpstreamUnavailable(
+                f"lookup по tvdb:{tvdb_id} вернул кандидатов: {len(found)}, а нужен один"
+            )
+        title = found[0].get("title")
+        if not title:
+            raise UpstreamUnavailable(f"Sonarr не знает сериала с tvdbId={tvdb_id}")
+        return str(title)
+
+    def _build_add_payload(
+        self,
+        tvdb_id: int,
+        title: str,
+        profile_id: int,
+        root: str,
+        tags: list[int] | None = None,
+    ) -> dict:
         """Тело запроса POST /api/v3/series.
 
-        НЕ РЕАЛИЗОВАНО НАМЕРЕННО.
+        Имена полей сверены со схемой `SeriesResource` и `AddSeriesOptions` в
+        `openapi/sonarr-v3-v4.0.19.2979.json`. Сверка автоматическая:
+        tests/test_payloads.py проверяет каждый ключ против той же схемы.
 
-        Сверить со схемой `SeriesResource` / `AddSeriesOptions` в
-        openapi/sonarr-v3-*.json.
+        Два поля здесь важнее прочих, и у обоих вредное умолчание:
 
-        Ориентир по полям, ПОДЛЕЖАЩИЙ ПРОВЕРКЕ:
-            tvdbId, qualityProfileId, rootFolderPath, monitored,
-            seasonFolder=True, monitorNewItems="none",
-            addOptions.monitor="none"
+        `monitorNewItems="none"` — по умолчанию `"all"`. Без него заказ одного
+        сезона превращается в подписку на сериал. Глобальной настройки для
+        поля не существует, задаётся только на сериал.
 
-        Значения addOptions.monitor: all | future | missing | existing |
-        pilot | firstSeason | latestSeason | none (плюс monitorSpecials /
-        unmonitorSpecials). Нам нужен "none".
+        `seasonFolder=True` — по умолчанию `false`, а `docs/NAMING.md` требует
+        папки сезонов.
 
-        monitorNewItems: значения all | none. Нам нужен "none" — ОБЯЗАТЕЛЬНО.
-
-        ОТКРЫТЫЙ ВОПРОС №1: массив seasons формально входит в состав данных
-        добавления, но addOptions.monitor может переопределить флаги в момент
-        добавления. Поэтому принят двухшаговый путь: добавить с monitor="none",
-        затем set_season_monitored(). Если проверка по схеме и логам Sonarr
-        покажет, что одного POST достаточно — упростить и обновить SPEC.md.
-
-        Если ожидаемого поля в схеме нет — СТОП-УСЛОВИЕ №1.
+        **Массив `seasons` здесь НЕ передаётся.** Проверено опытом на Sonarr
+        4.0.19.2979: `addOptions.monitor` затирает флаги после добавления,
+        причём ответ POST этого не показывает — возвращает `monitored: true`,
+        тогда как в базе лежит `false`. Мониторинг нужного сезона включается
+        вторым шагом. Подробности с таблицами — `docs/SPEC.md` 2.5.
         """
-        raise NotImplementedError("заполнить по openapi/sonarr-v3-*.json, схема SeriesResource")
+        payload: dict = {
+            "tvdbId": tvdb_id,
+            # title обязателен, хотя схема помечает его nullable: без него
+            # Sonarr падает с 500 при построении пути папки.
+            "title": title,
+            "qualityProfileId": profile_id,
+            "rootFolderPath": root,
+            "monitored": True,
+            "seasonFolder": True,
+            "monitorNewItems": "none",
+            "addOptions": {
+                "monitor": "none",
+                "searchForMissingEpisodes": False,
+                "searchForCutoffUnmetEpisodes": False,
+            },
+        }
+        if tags:
+            payload["tags"] = tags
+        return payload
 
     async def add_series(self, tvdb_id: int) -> dict:
         """Добавляет сериал БЕЗ мониторинга сезонов."""
         profile = await self.profile_id(self._s.sonarr_profile)
-        root = await self.root_folder(self._s.sonarr_root)
+        # В dev — выбрасываемый тестовый каталог, а не настоящая библиотека.
+        root = await self.root_folder(self._s.sonarr_root_effective)
 
-        payload = self._build_add_payload(tvdb_id, profile, root)
+        title = await self.lookup_title(tvdb_id)
+        tags = [await self.tag_id(self._s.test_tag)] if self._s.is_dev else None
+        payload = self._build_add_payload(tvdb_id, title, profile, root, tags)
         r = await self._request("POST", "/series", json=payload)
         if r.status_code >= 400:
             raise UpstreamUnavailable(
@@ -124,21 +186,39 @@ class Sonarr:
     def _build_seasonpass_payload(self, series: dict, season: int) -> dict:
         """Тело запроса POST /api/v3/seasonpass.
 
-        НЕ РЕАЛИЗОВАНО НАМЕРЕННО.
+        Форма сверена со схемами `SeasonPassResource` и
+        `SeasonPassSeriesResource`.
 
-        Известная форма, ПОДЛЕЖАЩАЯ ПРОВЕРКЕ по схеме: объект с массивом
-        `series` (каждый элемент — id, monitored и вложенный массив seasons
-        из {seasonNumber, monitored}) плюс объект `monitoringOptions` с полем
-        `monitor`.
+        **`monitoringOptions` не передаётся.** Это пресет, и он затирает явный
+        массив `seasons`. Проверено на живом Sonarr, сериал с шестью сезонами,
+        просили один:
 
-        Целевой сезон monitored=True, все остальные False. Проверяется
-        checks/06-bridge-season.sh: отслеживаемых сезонов обязано быть РОВНО
-        ОДИН.
+            monitoringOptions {"monitor": "none"}  -> отслеживается 0 сезонов
+            monitoringOptions {"monitor": "skip"}  -> отслеживается 0 сезонов
+            объект не передан                      -> отслеживается ровно 1
 
-        Альтернатива — PUT /api/v3/series/{id} с изменённым массивом seasons.
-        Выбрать по схеме, не по догадке.
+        Передаются ВСЕ сезоны, а не только целевой: непереданные сохранили бы
+        прежние флаги, и «ровно один» не получилось бы при заказе второго
+        сезона того же сериала.
+
+        Проверяется checks/06-bridge-season.sh: отслеживаемых сезонов обязано
+        быть ровно один, и это заказанный.
         """
-        raise NotImplementedError("заполнить по openapi/sonarr-v3-*.json, схема SeasonPassResource")
+        numbers = [s["seasonNumber"] for s in series.get("seasons", [])]
+        if season not in numbers:
+            raise SeasonOutOfRange(
+                f"у сериала нет сезона {season}; есть: "
+                f"{', '.join(str(n) for n in sorted(numbers))}"
+            )
+        return {
+            "series": [
+                {
+                    "id": int(series["id"]),
+                    "monitored": True,
+                    "seasons": [{"seasonNumber": n, "monitored": n == season} for n in numbers],
+                }
+            ]
+        }
 
     async def set_season_monitored(self, series: dict, season: int) -> None:
         payload = self._build_seasonpass_payload(series, season)

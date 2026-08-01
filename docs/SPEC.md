@@ -201,9 +201,31 @@ Lampa кеширует файлы плагинов. Без `no-store` при р�
 2. Разрешить `rootFolderPath`: `GET /api/v3/rootfolder`
 3. `POST /api/v3/movie`
 
-Поля запроса — `tmdbId`, `qualityProfileId`, `rootFolderPath`, `monitored`,
-`minimumAvailability`, `addOptions.searchForMovie`. **Точный состав и типы
-сверить с `openapi/radarr-v3-*.json`.**
+Поля запроса — `tmdbId`, **`title`**, `qualityProfileId`, `rootFolderPath`,
+`monitored`, `minimumAvailability`, `addOptions.searchForMovie`. Состав и типы
+сверены с `openapi/radarr-v3-v6.3.0.10514.json`.
+
+### `title` обязателен, хотя схема утверждает обратное
+
+В `MovieResource` у `title` стоит `"nullable": true`, а списка `required` у
+схемы нет вовсе. На практике Radarr 6.3.0.10514 без него отвечает:
+
+```
+500  System.NullReferenceException: Object reference not set to an instance of an object.
+        at NzbDrone.Core.Organizer.FileNameBuilder.CleanTitle(String title)
+```
+
+Причина: путь папки строится **в момент добавления** по `movieFolderFormat`,
+где стоит `{Movie CleanTitle}`. Пустое название — исключение внутри Radarr, а
+не понятная ошибка валидации.
+
+**Схема — источник истины по именам полей, но не по обязательности.**
+Второй случай после `colonReplacementFormat`, где схема неполна.
+
+Название берётся из `GET /api/v3/movie/lookup/tmdb?tmdbId=…`, то есть у самого
+Radarr, а не у TMDB: именно его Radarr подставит в имя папки, и для переводных
+тайтлов эти строки расходятся. Это поиск по идентификатору, а не по названию —
+запрет из `CLAUDE.md` касается нечёткого `term=<название>`.
 
 `minimumAvailability` задаётся из `RADARR_MIN_AVAILABILITY`. Допустимые
 значения: `announced`, `inCinemas`, `released`, `preDB`. По умолчанию
@@ -221,11 +243,17 @@ Radarr считает, что фильм ещё не вышел, добавле�
    Отсутствует или пуст → внятная ошибка `4xx`, не `500`. У части
    регионального контента его действительно нет.
 2. Разрешить `qualityProfileId` и `rootFolderPath` в Sonarr.
-3. `POST /api/v3/series` с `tvdbId`, `addOptions.monitor: "none"` и
-   **`monitorNewItems: "none"`**.
+3. `POST /api/v3/series` с `tvdbId`, **`title`**, `addOptions.monitor: "none"`
+   и **`monitorNewItems: "none"`**. `title` обязателен по той же причине, что
+   и у Radarr, и с тем же обманом схемы: без него Sonarr отвечает
+   `500 System.ArgumentNullException: Value cannot be null (Parameter 'input')`
+   из регулярного выражения при построении пути по `seriesFolderFormat`.
+   Берётся из `GET /api/v3/series/lookup?term=tvdb:<id>` — поиск по
+   идентификатору, результат проверяется на единственность.
 4. Включить мониторинг нужного сезона: `POST /api/v3/seasonpass` с массивом
    `series`, где для целевого сериала `seasons` содержит
    `{seasonNumber, monitored}` — целевой `true`, остальные `false`.
+   **Объект `monitoringOptions` не передавать вовсе.**
 5. Запустить поиск: `POST /api/v3/command` с
    `{"name": "SeasonSearch", "seriesId": …, "seasonNumber": …}`.
 
@@ -234,9 +262,36 @@ Radarr считает, что фильм ещё не вышел, добавле�
 заказ одного сезона превратится в подписку на сериал. Глобального значения
 по умолчанию для этого поля нет, задаётся только на сериал.
 
-Массив `seasons` можно передать и прямо в POST на шаге 3, но `addOptions.monitor`
-может переопределить флаги на момент добавления. Поэтому надёжнее два шага:
-добавить с `monitor: "none"`, затем `seasonpass`.
+### Два шага обязательны — проверено опытом
+
+Массив `seasons` формально можно передать прямо в POST на шаге 3. **Так
+делать нельзя.** Проверено на Sonarr 4.0.19.2979:
+
+| Что отправлено | Что вернул POST | Что легло в базу |
+|---|---|---|
+| `seasons: [{1, monitored: true}]` + `addOptions.monitor: "none"` | `monitored: true` | `monitored: false` |
+
+`addOptions.monitor` переопределяет флаги после добавления, **а ответ POST
+этого не показывает** — он отражает отправленное. Проверка результата по телу
+ответа даёт ложноположительный результат: кажется, что сезон отслеживается, а
+он нет. Отсюда правило: состояние читать отдельным `GET`, не из ответа на
+запись.
+
+### `monitoringOptions` в seasonpass — тот же капкан
+
+`monitoringOptions.monitor` — пресет, и он затирает явный массив `seasons`.
+Проверено на сериале с шестью сезонами, где просили отслеживать один:
+
+| `monitoringOptions` | Сезонов под мониторингом стало |
+|---|---|
+| `{"monitor": "none"}` | 0 — снялось со всех, включая запрошенный |
+| `{"monitor": "skip"}` | 0 — то же самое |
+| объект не передан | 1 — ровно запрошенный |
+
+Поэтому `monitoringOptions` не передаётся вовсе. Работающая альтернатива —
+`PUT /api/v3/series/{id}` с изменённым массивом `seasons`, проверена, даёт тот
+же результат. Выбран `seasonpass`: он не требует пересылать объект сериала
+целиком.
 
 **Поиск по названию через `series/lookup?term=` не использовать** — нечёткое
 совпадение притащит не тот сериал. Только точный `tvdbId`. Дополнительно:

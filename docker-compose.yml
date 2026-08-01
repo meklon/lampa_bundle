@@ -88,7 +88,11 @@ services:
       - SONARR_ROOT=${SONARR_ROOT}
       - SONARR_PROFILE=${SONARR_PROFILE}
       - TMDB_TOKEN=${TMDB_TOKEN}
+      # В dev-режиме заказы идут в тестовые root folder и метятся тегом:
+      # отладочный цикл не должен засорять настоящую библиотеку.
       - TEST_TAG=${TEST_TAG}
+      - TEST_RADARR_ROOT=${TEST_RADARR_ROOT}
+      - TEST_SONARR_ROOT=${TEST_SONARR_ROOT}
     ports:
       - "8000:8000"
     depends_on:
