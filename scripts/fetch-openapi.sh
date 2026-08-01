@@ -55,17 +55,56 @@ fi
 PATHS="$(jq '.paths | length' "$OUT")"
 echo "==> сохранено: $OUT (путей в схеме: $PATHS)"
 
+# ---------------------------------------------------------------------------
+# Коммит, а не только тег
+# ---------------------------------------------------------------------------
+# docs/ACCEPTANCE.md требует записи «с версией И коммитом». Тег — подвижная
+# ссылка: его можно передвинуть на другой коммит, и тогда файл в openapi/
+# перестанет соответствовать тому, что написано в SOURCES.md, молча.
+# Разрешаем тег в конкретный sha, а заодно считаем контрольную сумму файла.
+#
+# Владелец и репозиторий выводятся из самого URL, чтобы не заводить ещё один
+# аргумент, который можно передать не тот.
+COMMIT="?"
+case "$URL" in
+  https://raw.githubusercontent.com/*)
+    REST="${URL#https://raw.githubusercontent.com/}"
+    OWNER="${REST%%/*}"; REST="${REST#*/}"
+    REPO="${REST%%/*}"
+    COMMIT="$(curl -fsS "https://api.github.com/repos/$OWNER/$REPO/commits/$REF" \
+                | jq -r '.sha // "?"' 2>/dev/null || echo "?")"
+    ;;
+esac
+SHA256="$(sha256sum "$OUT" | cut -d' ' -f1)"
+
+# Запись идемпотентна: повторный запуск заменяет прежний блок для этого файла,
+# а не дописывает второй. Иначе SOURCES.md со временем превращается в журнал,
+# в котором непонятно, какая запись действующая.
+python3 - "$OUT" <<'PY'
+import re, sys, pathlib
+out = sys.argv[1]
+p = pathlib.Path("openapi/SOURCES.md")
+text = p.read_text(encoding="utf-8")
+name = out[len("openapi/"):]
+# Блок начинается с "## " и содержит строку с этим именем файла.
+blocks = re.split(r"(?m)^(?=## )", text)
+kept = [b for b in blocks if f"`{name}`" not in b]
+p.write_text("".join(kept).rstrip() + "\n", encoding="utf-8")
+PY
+
 {
   echo
   echo "## ${SERVICE} ${API}"
   echo
   echo "- файл: \`${OUT#openapi/}\`"
-  echo "- ref: \`${REF}\`"
+  echo "- версия: \`${REF}\`"
+  echo "- коммит: \`${COMMIT}\`"
+  echo "- sha256: \`${SHA256}\`"
   echo "- источник: ${URL}"
   echo "- скачано: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "- путей в схеме: ${PATHS}"
 } >> openapi/SOURCES.md
 
-echo "==> запись добавлена в openapi/SOURCES.md"
+echo "==> SOURCES.md: версия ${REF}, коммит ${COMMIT:0:12}"
 echo
 echo "Следующий шаг: ./scripts/check-versions.sh — сверить с живым инстансом."

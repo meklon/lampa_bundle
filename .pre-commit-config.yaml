@@ -18,8 +18,15 @@ repos:
         args: ["--maxkb=512"]
       - id: check-merge-conflict
       - id: check-yaml
+      # openapi/ исключён из обоих фиксеров намеренно. Это чужие файлы,
+      # скачанные по тегу из исходников *arr, и их sha256 записан в
+      # openapi/SOURCES.md. Дописанный перевод строки меняет сумму — запись о
+      # происхождении становится ложной, а расхождение молчаливое: файл
+      # выглядит тем же самым. Вендоренное хранится побайтно как у источника.
       - id: end-of-file-fixer
+        exclude: ^openapi/.*\.json$
       - id: trailing-whitespace
+        exclude: ^openapi/.*\.json$
       - id: detect-private-key
 
   - repo: https://github.com/astral-sh/ruff-pre-commit

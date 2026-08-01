@@ -30,9 +30,20 @@
 `addOptions.monitor` переопределит флаги в момент добавления, и нужен
 второй шаг через `seasonpass`.
 
-**Как проверить:** посмотреть `openapi/sonarr-v3-*.json`, схемы
-`SeriesResource` и `AddSeriesOptions`. Затем добавить сериал через веб-морду
-с выбором одного сезона и посмотреть в логах Sonarr, какой запрос ушёл.
+**Схема проверена на этапе 4 — вопрос ею не закрывается.**
+`openapi/sonarr-v3-v4.0.19.2979.json` подтверждает форму, но не поведение:
+
+- `seasons` действительно входит в `SeriesResource`
+- `addOptions.monitor` существует, среди 14 значений есть нужный `none`
+- `POST /api/v3/seasonpass` существует, форма
+  `{ series: [{ id, monitored, seasons: [{ seasonNumber, monitored, … }] }], monitoringOptions }`
+
+Чего в схеме нет и быть не может: что произойдёт при передаче `seasons` и
+`addOptions.monitor` одновременно. Это вопрос поведения, а не формы.
+
+**Как проверить:** остаётся эмпирика — добавить сериал через веб-морду с
+выбором одного сезона и посмотреть в логах Sonarr, какой запрос ушёл. Либо
+сравнить два способа на живом инстансе на этапе 5.
 
 **Что принято в `SPEC.md` до проверки:** двухшаговый путь как более надёжный.
 
@@ -56,19 +67,27 @@
 
 ---
 
-## 3. Точный состав полей `POST /api/v3/movie`
+## 3. Стартует ли поиск фильма в prod-режиме
 
-**Допущение:** `tmdbId`, `qualityProfileId`, `rootFolderPath`, `monitored`,
-`minimumAvailability`, `addOptions.searchForMovie` достаточны и корректны.
+Прежняя формулировка касалась состава полей `POST /api/v3/movie`. **Эта часть
+закрыта на этапе 4:** схема `openapi/radarr-v3-v6.3.0.10514.json` подтвердила
+все поля из `SPEC.md` 2.4 — `tmdbId` (integer), `qualityProfileId` (integer),
+`rootFolderPath` (string), `monitored` (boolean), `minimumAvailability`
+(`MovieStatusType`), `addOptions` (`AddMovieOptions` с `searchForMovie`).
 
-**Что известно точно:** формально обязательным по схеме является только
-`title`; практически добавление требует `tmdbId`, `qualityProfileId` и
-`rootFolderPath`. Значения `minimumAvailability`: `announced`, `inCinemas`,
-`released`, `preDB`, причём `preDB` сейчас идентичен `released`.
+**Что осталось непроверенным:** что задача поиска действительно появляется в
+Activity после добавления. В dev-режиме это принципиально не проверяется —
+`searchForMovie` всегда `false`, и так задумано.
 
-**Как проверить:** `openapi/radarr-v3-*.json`, схема `MovieResource` и
-`AddMovieOptions`. Затем заказать фильм и убедиться, что задача поиска
-реально появилась в Activity (в prod-режиме).
+Здесь же живёт риск из `SPEC.md` 2.4: слишком строгое `minimumAvailability`
+даёт «добавилось, но не ищет», причём **без ошибки**. Значение по умолчанию у
+нас `released`.
+
+**Как проверить:** только человеком, после подключения индексаторов и
+осознанного переключения `BRIDGE_ENV=prod`. До тех пор пункт закрыт быть не
+может.
+
+**Стоп-условие №7** при обнаружении, что фильм добавлен, а поиск не стартовал.
 
 ---
 
