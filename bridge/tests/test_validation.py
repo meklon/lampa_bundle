@@ -61,6 +61,9 @@ def test_dev_disables_search():
 
 
 def test_cors_never_wildcard():
+    """«*» — запрещённая подмена из CLAUDE.md, список origin всегда явный."""
     from app.config import settings
 
-    assert "*" not in settings().dev_cors_origins
+    origins = settings().cors_origin_list
+    assert origins, "список origin пуст — заказ не уйдёт ни с какой страницы"
+    assert "*" not in origins

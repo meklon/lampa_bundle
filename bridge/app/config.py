@@ -44,8 +44,21 @@ class Settings(BaseSettings):
 
     test_tag: str = "test"
 
-    # Разрешённые origin для CORS в dev-режиме. Никогда "*".
-    dev_cors_origins: tuple[str, ...] = ("http://localhost:3000",)
+    # Разрешённые origin для CORS. Никогда "*" — это запрещённая подмена.
+    #
+    # Нужен и в production, вопреки прежней записи в SPEC.md 2.8. Там
+    # утверждалось: «плагин отдаётся с того же origin, что и API, поэтому CORS
+    # не нужен». Это неверно. CORS определяется origin СТРАНИЦЫ, а не origin
+    # скрипта: плагин исполняется внутри страницы Lampa (Lampac на :9118), и
+    # его запрос к bridge (:8000) — кросс-доменный. Без заголовка браузер
+    # заблокирует ответ, а пользователь увидит «bridge недоступен».
+    #
+    # Задаётся строкой через запятую в CORS_ORIGINS.
+    cors_origins: str = "http://localhost:3000"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
     @property
     def is_dev(self) -> bool:

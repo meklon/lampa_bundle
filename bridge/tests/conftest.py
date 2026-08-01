@@ -30,6 +30,7 @@ def env(monkeypatch):
         "SONARR_PROFILE": "HD-1080p",
         "TMDB_TOKEN": "test-tmdb-token",
         "TEST_TAG": "test",
+        "CORS_ORIGINS": "http://192.168.200.251:9118,http://localhost:3000",
     }
     for k, v in values.items():
         monkeypatch.setenv(k, v)

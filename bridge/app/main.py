@@ -49,16 +49,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="bridge", lifespan=lifespan)
 
-# CORS нужен только в dev, когда Lampa поднята локально на другом порту.
-# В production плагин отдаётся с того же origin, что и API, поэтому CORS
-# не требуется вовсе. Список origin — явный. НИКОГДА "*".
-if settings().is_dev:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=list(settings().dev_cors_origins),
-        allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type"],
-    )
+# CORS нужен ВСЕГДА, а не только в dev.
+#
+# Прежде здесь стояло `if settings().is_dev` с обоснованием «плагин отдаётся с
+# того же origin, что и API». Обоснование неверно: CORS определяется origin
+# СТРАНИЦЫ, а не origin скрипта. Плагин исполняется внутри страницы Lampa
+# (Lampac на :9118), и его запрос к bridge (:8000) — кросс-доменный, сколько
+# бы файл плагина ни отдавался с bridge. В production заголовка не получал
+# никто, и каждый заказ падал бы с «bridge недоступен».
+#
+# Список явный, из CORS_ORIGINS. НИКОГДА "*" — запрещённая подмена.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings().cors_origin_list,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
 
 
 @app.middleware("http")
@@ -74,7 +80,18 @@ async def log_requests(request: Request, call_next):
     if request.method == "POST":
         body = await request.body()
 
-    log.info("-> %s %s body=%s", request.method, request.url.path, body.decode() or "-")
+    # Origin логируется намеренно: приложение Lampa на телефоне может слать
+    # что угодно, вплоть до "null" (упакованный вебвью с file://), а список
+    # разрешённых origin задаётся вручную. Без этой строки выяснять, что
+    # именно пришло, пришлось бы вслепую.
+    origin = request.headers.get("origin", "-")
+    log.info(
+        "-> %s %s origin=%s body=%s",
+        request.method,
+        request.url.path,
+        origin,
+        body.decode() or "-",
+    )
     response = await call_next(request)
     log.info("<- %s %s", request.url.path, response.status_code)
     return response

@@ -83,7 +83,7 @@ function buildEnv(cardJson, method, opts) {
   };
 
   global.document = {
-    currentScript: { src: 'http://192.168.1.10:8000/plugin.js' },
+    currentScript: { src: 'http://192.168.200.251:8000/plugin.js' },
     getElementsByTagName: () => [],
     createElement: () => ({
       set href(v) {
@@ -196,7 +196,7 @@ console.log('== Тело запроса');
   env.root.children[env.root.children.length - 1].handlers['hover:enter']();
 
   const req = env.calls.fetch[0];
-  check('адрес bridge выведен из адреса плагина', req.url === 'http://192.168.1.10:8000/order', req.url);
+  check('адрес bridge выведен из адреса плагина', req.url === 'http://192.168.200.251:8000/order', req.url);
   check('tmdb_id из карточки', req.body.tmdb_id === movie.id, String(req.body.tmdb_id));
   check('type=movie', req.body.type === 'movie');
   check('season=null для фильма', req.body.season === null);
