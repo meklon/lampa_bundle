@@ -120,9 +120,9 @@ def test_movie_minimum_availability_is_valid_enum(radarr_schema):
         tmdb_id=10378, title="Big Buck Bunny", profile_id=4, root="/data/media/movies", search=False
     )
     allowed = enum_values(radarr_schema, "MovieStatusType")
-    assert (
-        body["minimumAvailability"] in allowed
-    ), f"minimumAvailability={body['minimumAvailability']!r} нет в {allowed}"
+    assert body["minimumAvailability"] in allowed, (
+        f"minimumAvailability={body['minimumAvailability']!r} нет в {allowed}"
+    )
 
 
 @pytest.mark.parametrize("search", [False, True])

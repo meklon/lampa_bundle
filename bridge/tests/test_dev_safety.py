@@ -152,7 +152,9 @@ def test_wildcard_rejected_at_config(monkeypatch):
     monkeypatch.setenv("CORS_ORIGINS", "*")
     settings.cache_clear()
     with pytest.raises(ValueError, match=r"\*"):
-        settings().cors_origin_list
+        # Присваивание, а не голое обращение: свойство вычисляемое, и без
+        # присваивания это читается как опечатка (ruff B018).
+        _ = settings().cors_origin_list
     settings.cache_clear()
 
 

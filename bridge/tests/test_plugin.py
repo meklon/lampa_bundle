@@ -18,13 +18,17 @@ PLUGIN = Path(__file__).resolve().parents[1] / "static" / "plugin.js"
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="нужен node")
 def test_plugin_syntax_valid():
-    r = subprocess.run(["node", "--check", str(PLUGIN)], capture_output=True, text=True)
+    # check=False явно: код возврата разбирается ниже, исключение помешало бы
+    # показать stderr в сообщении об ошибке.
+    r = subprocess.run(
+        ["node", "--check", str(PLUGIN)], capture_output=True, text=True, check=False
+    )
     assert r.returncode == 0, r.stderr
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="нужен node")
 def test_plugin_harness():
-    r = subprocess.run(["node", str(HARNESS)], capture_output=True, text=True)
+    r = subprocess.run(["node", str(HARNESS)], capture_output=True, text=True, check=False)
     assert r.returncode == 0, r.stdout + r.stderr
 
 
