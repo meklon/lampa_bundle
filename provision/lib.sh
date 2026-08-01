@@ -19,10 +19,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 set -a; . "$ROOT/.env"; set +a
 
-RADARR="http://localhost:7878"
-SONARR="http://localhost:8989"
-PROWLARR="http://localhost:9696"
-QBT="http://localhost:8081"
+# Адреса, по которым МЫ обращаемся к сервисам. С хоста это localhost, из
+# контейнера провижининга — имена сервисов compose-сети. Переопределяются
+# переменными *_BASE, которые задаёт сервис provision в docker-compose.yml.
+RADARR="${RADARR_BASE:-http://localhost:7878}"
+SONARR="${SONARR_BASE:-http://localhost:8989}"
+PROWLARR="${PROWLARR_BASE:-http://localhost:9696}"
+QBT="${QBT_BASE:-http://localhost:8081}"
 
 log()  { printf '     %s\n' "$*"; }
 step() { printf '==>  %s\n' "$*"; }
@@ -97,6 +100,13 @@ qbt_post() {
 # идут эти: сервисы обращаются друг к другу внутри compose-сети, и localhost
 # там указывает на сам контейнер. Prowlarr с baseUrl=http://localhost:7878
 # стучался бы в самого себя.
+# Пути внутри контейнеров: единственное монтирование ${DATA_ROOT}:/data,
+# остальное задаётся относительными путями из .env.
+TORRENTS_MOVIES="/data/${TORRENTS_PATH}/movies"
+TORRENTS_TV="/data/${TORRENTS_PATH}/tv"
+MEDIA_MOVIES="/data/${MOVIES_PATH}"
+MEDIA_TV="/data/${TV_PATH}"
+
 RADARR_INTERNAL="http://radarr:7878"
 SONARR_INTERNAL="http://sonarr:8989"
 PROWLARR_INTERNAL="http://prowlarr:9696"

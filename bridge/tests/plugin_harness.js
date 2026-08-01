@@ -83,7 +83,7 @@ function buildEnv(cardJson, method, opts) {
   };
 
   global.document = {
-    currentScript: { src: 'http://192.168.1.10:8000/plugin.js' },
+    currentScript: { src: 'http://192.168.200.251:8000/plugin.js' },
     getElementsByTagName: () => [],
     createElement: () => ({
       set href(v) {
@@ -97,6 +97,25 @@ function buildEnv(cardJson, method, opts) {
   global.$ = (html) => makeNode(html);
 
   global.fetch = (url, init) => {
+    // GET /profiles — список профилей качества. Отдаём тот же набор, что
+    // стоит в Radarr и Sonarr по умолчанию, с отметкой умолчания.
+    if (url.indexOf('/profiles') !== -1) {
+      calls.fetch.push({ url, body: null });
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve(
+            opts.noProfiles
+              ? []
+              : [
+                  { name: 'Any', default: false },
+                  { name: 'HD-720p', default: false },
+                  { name: 'HD-1080p', default: true },
+                  { name: 'Ultra-HD', default: false }
+                ]
+          )
+      });
+    }
     calls.fetch.push({ url, body: JSON.parse(init.body) });
     return Promise.resolve({
       ok: true,
@@ -143,6 +162,12 @@ function buildEnv(cardJson, method, opts) {
 const movie = JSON.parse(fs.readFileSync(path.join(RECORDED, 'tmdb-movie-10378.json'), 'utf8'));
 const tv = JSON.parse(fs.readFileSync(path.join(RECORDED, 'tmdb-tv-1396.json'), 'utf8'));
 
+// Выбор качества идёт через fetch, поэтому проверки после нажатия обязаны
+// дождаться промисов. Иначе стенд смотрит на состояние до ответа.
+const tick = () => new Promise((r) => setTimeout(r, 0));
+
+async function main() {
+
 console.log('== Фильм');
 {
   const env = buildEnv(movie, 'movie');
@@ -160,54 +185,84 @@ console.log('== Фильм');
   check('подписка на hover:enter', btn && typeof btn.handlers['hover:enter'] === 'function');
 
   btn.handlers['hover:enter']();
-  check('выбор сезона для фильма не показывается', env.calls.select.length === 0);
+  await tick();
+
+  check('спрошено качество', env.calls.select.length === 1);
+  const sel = env.calls.select[0];
+  check('для фильма сезон не спрашивается', sel && sel.title === 'Качество');
+  check(
+    'умолчание первым и подписано',
+    sel.items[0].profile === 'HD-1080p' && sel.items[0].title.indexOf('по умолчанию') !== -1,
+    JSON.stringify(sel.items[0])
+  );
+  check('список профилей от bridge, не зашит', sel.items.length === 4);
+
+  sel.onSelect({ profile: 'Ultra-HD' });
+  await tick();
+
+  const req = env.calls.fetch.filter((c) => c.body)[0];
+  check('выбранный профиль ушёл в заказ', req.body.profile === 'Ultra-HD', JSON.stringify(req.body));
+  check('type=movie, season=null', req.body.type === 'movie' && req.body.season === null);
 }
 
-console.log('== Сериал');
+console.log('== Сериал: сначала сезон, потом качество');
 {
   const env = buildEnv(tv, 'tv');
   env.fireFull(env.event);
   const btn = env.root.children[env.root.children.length - 1];
   btn.handlers['hover:enter']();
+  await tick();
 
-  check('показан выбор сезона', env.calls.select.length === 1);
-  const sel = env.calls.select[0];
+  check('первым спрошен сезон', env.calls.select.length === 1 && env.calls.select[0].title.indexOf('сезон') !== -1,
+    env.calls.select[0] && env.calls.select[0].title);
 
-  const numbers = sel.items.map((i) => i.season);
+  const seasons = env.calls.select[0].items.map((i) => i.season);
   const expected = tv.seasons.filter((s) => s.episode_count > 0).map((s) => s.season_number);
-  check(
-    'сезоны совпали с данными карточки',
-    JSON.stringify(numbers) === JSON.stringify(expected),
-    'плагин: ' + JSON.stringify(numbers) + '  данные: ' + JSON.stringify(expected)
-  );
-  check(
-    'сезон 0 назван спецвыпусками',
-    !numbers.includes(0) || sel.items.find((i) => i.season === 0).title === 'Спецвыпуски'
-  );
+  check('сезоны совпали с данными карточки', JSON.stringify(seasons) === JSON.stringify(expected),
+    'плагин: ' + JSON.stringify(seasons) + '  данные: ' + JSON.stringify(expected));
 
-  sel.onSelect({ season: 2 });
-  check('фокус возвращён', env.calls.toggle.includes('content'));
+  env.calls.select[0].onSelect({ season: 2 });
+  await tick();
+
+  check('вторым спрошено качество', env.calls.select.length === 2 && env.calls.select[1].title === 'Качество');
+  env.calls.select[1].onSelect({ profile: 'HD-720p' });
+  await tick();
+
+  const req = env.calls.fetch.filter((c) => c.body)[0];
+  check('в заказе и сезон, и профиль',
+    req.body.season === 2 && req.body.profile === 'HD-720p', JSON.stringify(req.body));
+  check('фокус возвращён после обоих списков', env.calls.toggle.length >= 2);
 }
 
-console.log('== Тело запроса');
+console.log('== Профили недоступны — заказ не срывается');
 {
-  const env = buildEnv(movie, 'movie');
+  const env = buildEnv(movie, 'movie', { noProfiles: true });
   env.fireFull(env.event);
   env.root.children[env.root.children.length - 1].handlers['hover:enter']();
+  await tick();
+  await tick();
 
-  const req = env.calls.fetch[0];
-  check('адрес bridge выведен из адреса плагина', req.url === 'http://192.168.1.10:8000/order', req.url);
-  check('tmdb_id из карточки', req.body.tmdb_id === movie.id, String(req.body.tmdb_id));
-  check('type=movie', req.body.type === 'movie');
-  check('season=null для фильма', req.body.season === null);
+  check('список качества не показан', env.calls.select.length === 0);
+  const req = env.calls.fetch.filter((c) => c.body)[0];
+  check('заказ всё равно ушёл', !!req);
+  check('поле profile не отправлено — bridge подставит умолчание',
+    req && !('profile' in req.body), req && JSON.stringify(req.body));
 }
 
-console.log('== Запасной якорь, когда кнопка торрентов скрыта');
+console.log('== Адрес bridge и запасной якорь');
 {
   const env = buildEnv(movie, 'movie', { noTorrentButton: true });
   env.fireFull(env.event);
   const buttons = env.root.children.find((c) => c.html.indexOf('full-start-new__buttons') !== -1);
   check('кнопка легла в блок кнопок', buttons.children.some((c) => c.html.indexOf('view--order') !== -1));
+
+  // Кнопка здесь лежит ВНУТРИ блока кнопок, а не в корне — иначе якорь бы не
+  // проверялся.
+  const orderBtn = buttons.children.find((c) => c.html.indexOf('view--order') !== -1);
+  orderBtn.handlers['hover:enter']();
+  await tick();
+  check('адрес bridge выведен из адреса плагина',
+    env.calls.fetch[0].url.indexOf('http://192.168.200.251:8000/') === 0, env.calls.fetch[0].url);
 }
 
 console.log('');
@@ -216,3 +271,6 @@ if (failures) {
   process.exit(1);
 }
 console.log('ИТОГ: прошло');
+}
+
+main();

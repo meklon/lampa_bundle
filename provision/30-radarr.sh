@@ -4,8 +4,7 @@
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 : "${RADARR_API_KEY:?не задан RADARR_API_KEY}"
-: "${RADARR_ROOT:?не задан RADARR_ROOT}"
-: "${TEST_RADARR_ROOT:?не задан TEST_RADARR_ROOT}"
+: "${MOVIES_PATH:?не задан MOVIES_PATH}"
 
 wait_api "$RADARR" "$RADARR_API_KEY" v3
 
@@ -23,8 +22,7 @@ ensure_root() {
       "$(jq -n --arg p "$path" '{path:$p}')" >/dev/null
   fi
 }
-ensure_root "$RADARR_ROOT"
-ensure_root "$TEST_RADARR_ROOT"
+ensure_root "$MEDIA_MOVIES"
 
 # ---------------------------------------------------------------------------
 step "Radarr: жёсткие ссылки вместо копирования"

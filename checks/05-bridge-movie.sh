@@ -42,7 +42,7 @@ fi
 ok "найден: $(echo "$MOVIE" | jq -r .title)"
 
 title "Параметры выставлены как ожидалось"
-assert_eq "rootFolderPath"      "${TEST_RADARR_ROOT:-}"           "$(echo "$MOVIE" | jq -r .rootFolderPath)"
+assert_eq "rootFolderPath"      "$C_MOVIES"                       "$(echo "$MOVIE" | jq -r .rootFolderPath)"
 assert_eq "minimumAvailability" "${RADARR_MIN_AVAILABILITY:-released}" "$(echo "$MOVIE" | jq -r .minimumAvailability)"
 assert_eq "monitored"           true                              "$(echo "$MOVIE" | jq -r .monitored)"
 

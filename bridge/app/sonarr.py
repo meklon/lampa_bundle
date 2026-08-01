@@ -12,10 +12,14 @@
      для поля не существует, задаётся только на сериал.
 """
 
+import asyncio
+import time
+
 import httpx
 
 from .config import settings
 from .errors import (
+    ProfileNotAllowed,
     ProfileNotFound,
     RootFolderNotFound,
     SeasonOutOfRange,
@@ -50,6 +54,23 @@ class Sonarr:
         return r
 
     # -- разрешение параметров ------------------------------------------------
+
+    async def profiles(self) -> list[str]:
+        """Имена профилей качества — для выбора в плагине. См. Radarr.profiles."""
+        r = await self._request("GET", "/qualityprofile")
+        if r.status_code >= 400:
+            raise UpstreamUnavailable(f"Sonarr /qualityprofile вернул {r.status_code}")
+        return [str(p["name"]) for p in r.json()]
+
+    async def resolve_profile(self, requested: str | None) -> str:
+        if requested is None:
+            return self._s.sonarr_profile
+        available = await self.profiles()
+        if requested not in available:
+            raise ProfileNotAllowed(
+                f"профиля «{requested}» нет в Sonarr; есть: {', '.join(available)}"
+            )
+        return requested
 
     async def profile_id(self, name: str) -> int:
         r = await self._request("GET", "/qualityprofile")
@@ -167,11 +188,10 @@ class Sonarr:
             payload["tags"] = tags
         return payload
 
-    async def add_series(self, tvdb_id: int) -> dict:
+    async def add_series(self, tvdb_id: int, profile_name: str | None = None) -> dict:
         """Добавляет сериал БЕЗ мониторинга сезонов."""
-        profile = await self.profile_id(self._s.sonarr_profile)
-        # В dev — выбрасываемый тестовый каталог, а не настоящая библиотека.
-        root = await self.root_folder(self._s.sonarr_root_effective)
+        profile = await self.profile_id(profile_name or self._s.sonarr_profile)
+        root = await self.root_folder(self._s.sonarr_root)
 
         title = await self.lookup_title(tvdb_id)
         tags = [await self.tag_id(self._s.test_tag)] if self._s.is_dev else None
@@ -207,8 +227,7 @@ class Sonarr:
         numbers = [s["seasonNumber"] for s in series.get("seasons", [])]
         if season not in numbers:
             raise SeasonOutOfRange(
-                f"у сериала нет сезона {season}; есть: "
-                f"{', '.join(str(n) for n in sorted(numbers))}"
+                f"у сериала нет сезона {season}; есть: {', '.join(str(n) for n in sorted(numbers))}"
             )
         return {
             "series": [
@@ -220,12 +239,77 @@ class Sonarr:
             ]
         }
 
+    async def _series_state(self, series_id: int) -> tuple[dict, str]:
+        """Сериал и отпечаток его изменчивой части."""
+        r = await self._request("GET", f"/series/{series_id}")
+        if r.status_code >= 400:
+            raise UpstreamUnavailable(f"Sonarr /series/{series_id} вернул {r.status_code}")
+        data = r.json()
+        seasons = [(s.get("seasonNumber"), s.get("monitored")) for s in data.get("seasons", [])]
+        stats = (data.get("statistics") or {}).get("episodeCount")
+        return data, repr((seasons, stats))
+
+    async def wait_until_settled(self, series_id: int, timeout: float = 30.0) -> dict:
+        """Ждёт, пока Sonarr перестанет менять состояние сериала.
+
+        Добавление сериала запускает у Sonarr фоновую обработку: он
+        перестраивает список сезонов и СБРАСЫВАЕТ флаги мониторинга. Отправить
+        seasonpass, не дождавшись её, значит отдать результат на затирание.
+
+        Так и было: между POST /series и POST /seasonpass проходило 18 мс, оба
+        отвечали успехом (201 и 202), а в базе оставалось НОЛЬ отслеживаемых
+        сезонов. Ни одного признака ошибки — ни в ответах, ни в логах.
+
+        Дожидаться конкретной команды не выходит: RefreshSeries не появляется
+        в /api/v3/command по seriesId, а statistics.episodeCount скачет.
+        Поэтому признак — не событие, а ТИШИНА: состояние прочитано дважды
+        подряд и совпало.
+
+        Ожидание живёт внутри одного запроса и не делает bridge состоянием:
+        ни очереди, ни фонового опроса, ни повторной доставки. Это доведение
+        до конца работы, которую запрос уже начал.
+        """
+        deadline = time.monotonic() + timeout
+        _, previous = await self._series_state(series_id)
+        while time.monotonic() < deadline:
+            await asyncio.sleep(1.0)
+            data, current = await self._series_state(series_id)
+            if current == previous:
+                return data
+            previous = current
+        raise UpstreamUnavailable(
+            "Sonarr не закончил обработку сериала за отведённое время — попробуй ещё раз"
+        )
+
     async def set_season_monitored(self, series: dict, season: int) -> None:
+        series_id = int(series["id"])
+
+        # Дождаться тишины и взять СВЕЖИЙ объект: переданный — это ответ на
+        # запись, а его список сезонов после фоновой обработки устаревает.
+        series = await self.wait_until_settled(series_id)
+
         payload = self._build_seasonpass_payload(series, season)
         r = await self._request("POST", "/seasonpass", json=payload)
         if r.status_code >= 400:
             raise UpstreamUnavailable(
                 f"Sonarr отказал при настройке сезона: {r.status_code} {r.text[:300]}"
+            )
+
+        # seasonpass отвечает 202 Accepted — «принято», а не «применено».
+        # Поэтому результат читается отдельным GET, а не берётся из ответа на
+        # запись. Молчаливое расхождение здесь уже случалось: см. SPEC.md 2.5,
+        # где POST /series возвращал monitored=true при false в базе.
+        await self._verify_season_monitored(series_id, season)
+
+    async def _verify_season_monitored(self, series_id: int, season: int) -> None:
+        r = await self._request("GET", f"/series/{series_id}")
+        if r.status_code >= 400:
+            raise UpstreamUnavailable(f"Sonarr /series/{series_id} вернул {r.status_code}")
+        monitored = [s["seasonNumber"] for s in r.json().get("seasons", []) if s.get("monitored")]
+        if monitored != [season]:
+            raise UpstreamUnavailable(
+                f"Sonarr не применил мониторинг сезона {season}: "
+                f"сейчас отслеживаются {monitored or 'ни одного'}. Попробуй ещё раз"
             )
 
     async def search_season(self, series_id: int, season: int) -> None:

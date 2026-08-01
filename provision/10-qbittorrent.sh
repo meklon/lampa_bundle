@@ -25,8 +25,8 @@ ensure_category() {
   fi
 }
 
-ensure_category radarr /data/torrents/movies
-ensure_category sonarr /data/torrents/tv
+ensure_category radarr "$TORRENTS_MOVIES"
+ensure_category sonarr "$TORRENTS_TV"
 
 step "qBittorrent: базовые настройки"
 # Автоматический режим управления торрентами выключен: пути задаются

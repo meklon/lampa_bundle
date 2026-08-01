@@ -25,11 +25,10 @@ def env(monkeypatch):
         "SONARR_URL": "http://sonarr:8989",
         "SONARR_API_KEY": "test-sonarr-key",
         "SONARR_ROOT": "/data/media/tv",
-        "TEST_RADARR_ROOT": "/data/media/_test_movies",
-        "TEST_SONARR_ROOT": "/data/media/_test_tv",
         "SONARR_PROFILE": "HD-1080p",
         "TMDB_TOKEN": "test-tmdb-token",
         "TEST_TAG": "test",
+        "CORS_ORIGINS": "http://192.168.200.251:9118,http://localhost:3000",
     }
     for k, v in values.items():
         monkeypatch.setenv(k, v)

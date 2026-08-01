@@ -53,8 +53,22 @@ class UpstreamAuth(BridgeError):
 
 
 class ProfileNotFound(BridgeError):
+    """Профиля из ОКРУЖЕНИЯ нет в *arr — это ошибка настройки, отсюда 500."""
+
     status_code = 500
     message = "профиль качества с таким именем не найден"
+
+
+class ProfileNotAllowed(BridgeError):
+    """Профиля из ЗАПРОСА нет в *arr.
+
+    Это пользовательский ввод, а не поломка настройки: запрос корректен по
+    форме, но просит несуществующее. Отсюда 422, а не 500 — иначе человек
+    увидит «внутренняя ошибка» там, где достаточно выбрать другое.
+    """
+
+    status_code = 422
+    message = "такого профиля качества нет"
 
 
 class RootFolderNotFound(BridgeError):

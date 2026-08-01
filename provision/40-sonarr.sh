@@ -8,8 +8,7 @@
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 : "${SONARR_API_KEY:?не задан SONARR_API_KEY}"
-: "${SONARR_ROOT:?не задан SONARR_ROOT}"
-: "${TEST_SONARR_ROOT:?не задан TEST_SONARR_ROOT}"
+: "${TV_PATH:?не задан TV_PATH}"
 
 wait_api "$SONARR" "$SONARR_API_KEY" v3
 
@@ -27,8 +26,7 @@ ensure_root() {
       "$(jq -n --arg p "$path" '{path:$p}')" >/dev/null
   fi
 }
-ensure_root "$SONARR_ROOT"
-ensure_root "$TEST_SONARR_ROOT"
+ensure_root "$MEDIA_TV"
 
 # ---------------------------------------------------------------------------
 step "Sonarr: жёсткие ссылки и папки сезонов"

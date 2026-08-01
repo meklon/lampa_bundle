@@ -12,6 +12,7 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 
 import httpx
 from fastapi import FastAPI, Request
@@ -20,7 +21,7 @@ from fastapi.responses import JSONResponse, Response
 
 from .config import settings
 from .errors import BridgeError, SeasonOutOfRange
-from .models import OrderRequest, OrderResponse
+from .models import OrderRequest, OrderResponse, Profile
 from .radarr import Radarr
 from .sonarr import Sonarr
 from .tmdb import Tmdb
@@ -49,16 +50,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="bridge", lifespan=lifespan)
 
-# CORS нужен только в dev, когда Lampa поднята локально на другом порту.
-# В production плагин отдаётся с того же origin, что и API, поэтому CORS
-# не требуется вовсе. Список origin — явный. НИКОГДА "*".
-if settings().is_dev:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=list(settings().dev_cors_origins),
-        allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type"],
-    )
+# CORS нужен ВСЕГДА, а не только в dev.
+#
+# Прежде здесь стояло `if settings().is_dev` с обоснованием «плагин отдаётся с
+# того же origin, что и API». Обоснование неверно: CORS определяется origin
+# СТРАНИЦЫ, а не origin скрипта. Плагин исполняется внутри страницы Lampa
+# (Lampac на :9118), и его запрос к bridge (:8000) — кросс-доменный, сколько
+# бы файл плагина ни отдавался с bridge. В production заголовка не получал
+# никто, и каждый заказ падал бы с «bridge недоступен».
+#
+# Список явный, из CORS_ORIGINS. НИКОГДА "*" — запрещённая подмена.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings().cors_origin_list,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
 
 
 @app.middleware("http")
@@ -74,7 +81,18 @@ async def log_requests(request: Request, call_next):
     if request.method == "POST":
         body = await request.body()
 
-    log.info("-> %s %s body=%s", request.method, request.url.path, body.decode() or "-")
+    # Origin логируется намеренно: приложение Lampa на телефоне может слать
+    # что угодно, вплоть до "null" (упакованный вебвью с file://), а список
+    # разрешённых origin задаётся вручную. Без этой строки выяснять, что
+    # именно пришло, пришлось бы вслепую.
+    origin = request.headers.get("origin", "-")
+    log.info(
+        "-> %s %s origin=%s body=%s",
+        request.method,
+        request.url.path,
+        origin,
+        body.decode() or "-",
+    )
     response = await call_next(request)
     log.info("<- %s %s", request.url.path, response.status_code)
     return response
@@ -113,6 +131,28 @@ async def plugin_js() -> Response:
     )
 
 
+@app.get("/profiles", response_model=list[Profile])
+async def profiles(type: Literal["movie", "tv"], request: Request) -> list[Profile]:
+    """Профили качества для выбора в плагине.
+
+    Список берётся у самих Radarr и Sonarr, а не задаётся в коде: профили
+    заводит и переименовывает человек, и захардкоженный перечень разъехался бы
+    с действительностью молча.
+
+    Разрешение здесь не параметр загрузки: в *arr оно часть профиля, который
+    заодно определяет, до чего файл потом апгрейдится.
+    """
+    client: httpx.AsyncClient = request.app.state.http
+    s = settings()
+    if type == "movie":
+        names = await Radarr(client).profiles()
+        default = s.radarr_profile
+    else:
+        names = await Sonarr(client).profiles()
+        default = s.sonarr_profile
+    return [Profile(name=n, default=(n == default)) for n in names]
+
+
 @app.post("/order", response_model=OrderResponse)
 async def order(req: OrderRequest, request: Request) -> OrderResponse:
     client: httpx.AsyncClient = request.app.state.http
@@ -120,16 +160,24 @@ async def order(req: OrderRequest, request: Request) -> OrderResponse:
     tmdb = Tmdb(client)
 
     if req.type == "movie":
-        return await _order_movie(client, tmdb, req.tmdb_id, s.search_enabled)
+        return await _order_movie(client, tmdb, req.tmdb_id, s.search_enabled, req.profile)
 
     assert req.season is not None  # обеспечено валидатором модели
-    return await _order_season(client, tmdb, req.tmdb_id, req.season)
+    return await _order_season(client, tmdb, req.tmdb_id, req.season, req.profile)
 
 
 async def _order_movie(
-    client: httpx.AsyncClient, tmdb: Tmdb, tmdb_id: int, search: bool
+    client: httpx.AsyncClient,
+    tmdb: Tmdb,
+    tmdb_id: int,
+    search: bool,
+    profile: str | None = None,
 ) -> OrderResponse:
     radarr = Radarr(client)
+
+    # Профиль проверяется ДО обращения к библиотеке: если запрошен
+    # несуществующий, честнее сказать об этом сразу, чем после добавления.
+    profile_name = await radarr.resolve_profile(profile)
 
     existing = await radarr.find_by_tmdb(tmdb_id)
     if existing:
@@ -139,21 +187,29 @@ async def _order_movie(
         )
 
     title = await tmdb.movie_title(tmdb_id)
-    await radarr.add_movie(tmdb_id, search=search)
-    detail = None if search else "добавлено без поиска (dev-режим)"
+    await radarr.add_movie(tmdb_id, search=search, profile_name=profile_name)
+    detail = f"качество: {profile_name}"
+    if not search:
+        detail += ", без поиска (dev-режим)"
     return OrderResponse(status="queued", title=title, detail=detail)
 
 
 async def _order_season(
-    client: httpx.AsyncClient, tmdb: Tmdb, tmdb_id: int, season: int
+    client: httpx.AsyncClient,
+    tmdb: Tmdb,
+    tmdb_id: int,
+    season: int,
+    profile: str | None = None,
 ) -> OrderResponse:
     sonarr = Sonarr(client)
+
+    profile_name = await sonarr.resolve_profile(profile)
 
     # Валидация сезона до обращения к Sonarr: дешевле и сообщение понятнее.
     numbers = await tmdb.tv_season_numbers(tmdb_id)
     if numbers and season not in numbers:
         raise SeasonOutOfRange(
-            f"у сериала нет сезона {season}; есть: " f"{', '.join(str(n) for n in sorted(numbers))}"
+            f"у сериала нет сезона {season}; есть: {', '.join(str(n) for n in sorted(numbers))}"
         )
 
     # Обязательный шаг: Sonarr не принимает tmdbId.
@@ -163,7 +219,7 @@ async def _order_season(
     series = await sonarr.find_by_tvdb(tvdb_id)
     created = False
     if series is None:
-        series = await sonarr.add_series(tvdb_id)
+        series = await sonarr.add_series(tvdb_id, profile_name=profile_name)
         created = True
 
     # Ровно один сезон под мониторингом. Проверяется checks/06.
@@ -171,10 +227,14 @@ async def _order_season(
     await sonarr.search_season(int(series["id"]), season)
 
     if not created:
+        # Профиль у существующего сериала НЕ меняется: заказ второго сезона не
+        # повод переписывать качество для уже скачанного.
         return OrderResponse(
             status="exists", title=title, detail=f"сериал уже был, сезон {season} добавлен"
         )
-    detail = None if settings().search_enabled else "добавлено без поиска (dev-режим)"
+    detail = f"сезон {season}, качество: {profile_name}"
+    if not settings().search_enabled:
+        detail += ", без поиска (dev-режим)"
     return OrderResponse(status="queued", title=title, detail=detail)
 
 

@@ -8,19 +8,21 @@
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 title "Каталоги существуют (внутри контейнера radarr)"
-for d in /data/torrents/movies /data/torrents/tv /data/media/movies /data/media/tv; do
+for d in "$C_TORRENTS/movies" "$C_TORRENTS/tv" "$C_MOVIES" "$C_TV"; do
   docker compose exec -T radarr test -d "$d" 2>/dev/null
   assert "есть $d" $?
 done
 
 title "Владелец соответствует PUID/PGID"
-OWNER="$(docker compose exec -T radarr stat -c '%u:%g' /data/media 2>/dev/null | tr -d '\r')"
-assert_eq "владелец /data/media" "${PUID}:${PGID}" "$OWNER"
+OWNER="$(docker compose exec -T radarr stat -c '%u:%g' "$C_MOVIES" 2>/dev/null | tr -d '\r')"
+assert_eq "владелец $C_MOVIES" "${PUID}:${PGID}" "$OWNER"
 
-title "torrents и media на одной файловой системе (в контейнере)"
-DEV_T="$(docker compose exec -T radarr stat -c %d /data/torrents 2>/dev/null | tr -d '\r')"
-DEV_M="$(docker compose exec -T radarr stat -c %d /data/media 2>/dev/null | tr -d '\r')"
-info "устройство torrents: $DEV_T, media: $DEV_M"
+title "торренты и библиотека на одной файловой системе (в контейнере)"
+DEV_T="$(docker compose exec -T radarr stat -c %d "$C_TORRENTS" 2>/dev/null | tr -d '\r')"
+DEV_M="$(docker compose exec -T radarr stat -c %d "$C_MOVIES" 2>/dev/null | tr -d '\r')"
+info "устройство торрентов: $DEV_T, библиотеки: $DEV_M"
+info "Совпадения номеров МАЛО: два bind-монтирования одного каталога дают"
+info "одинаковый %d, а ln между ними возвращает EXDEV. Решает проба ниже."
 if [ -n "$DEV_T" ] && [ "$DEV_T" = "$DEV_M" ]; then
   ok "одно устройство"
 else
@@ -31,10 +33,13 @@ else
 fi
 
 title "Жёсткая ссылка реально создаётся (в контейнере)"
+# Пути передаются аргументами, а не подстановкой: внутри одинарных кавычек
+# переменные хоста не раскрываются, а двойные заставили бы экранировать всё
+# остальное.
 docker compose exec -T radarr sh -c '
   set -e
-  T=/data/torrents/.hlprobe
-  M=/data/media/.hlprobe
+  T="$1/.hlprobe"
+  M="$2/.hlprobe"
   rm -f "$T" "$M"
   echo probe > "$T"
   ln "$T" "$M"
@@ -42,21 +47,21 @@ docker compose exec -T radarr sh -c '
   I1=$(stat -c %i "$T"); I2=$(stat -c %i "$M")
   rm -f "$T" "$M"
   [ "$N" -ge 2 ] && [ "$I1" = "$I2" ]
-' >/dev/null 2>&1
-assert "ln между torrents и media работает, иноды совпадают" $?
+' _ "$C_TORRENTS" "$C_MOVIES" >/dev/null 2>&1
+assert "ln между торрентами и библиотекой работает, иноды совпадают" $?
 
 title "Тот же тест в контейнере sonarr"
 docker compose exec -T sonarr sh -c '
-  T=/data/torrents/.hlprobe2; M=/data/media/.hlprobe2
+  T="$1/.hlprobe2"; M="$2/.hlprobe2"
   rm -f "$T" "$M"; echo probe > "$T"
   ln "$T" "$M" && N=$(stat -c %h "$M") && rm -f "$T" "$M" && [ "$N" -ge 2 ]
-' >/dev/null 2>&1
+' _ "$C_TORRENTS" "$C_TV" >/dev/null 2>&1
 assert "sonarr: ln работает" $?
 
 title "Тот же тест в контейнере qbittorrent"
 docker compose exec -T qbittorrent sh -c '
-  test -d /data/torrents && test -d /data/media
-' >/dev/null 2>&1
+  test -d "$1" && test -d "$2"
+' _ "$C_TORRENTS" "$C_MOVIES" >/dev/null 2>&1
 assert "qbittorrent видит оба каталога по /data" $?
 
 finish
