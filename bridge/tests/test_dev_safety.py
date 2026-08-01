@@ -82,3 +82,81 @@ def test_no_secrets_in_plugin_js():
         assert secret not in text
     for forbidden in ("X-Api-Key", "api_key", "7878", "8989", "9696"):
         assert forbidden not in text, f"в plugin.js есть «{forbidden}»"
+
+
+# ---------------------------------------------------------------------------
+# CORS
+# ---------------------------------------------------------------------------
+
+
+def test_cors_allows_same_host_any_port():
+    """Обычная установка: Lampac и bridge на одном адресе, порты разные.
+
+    Настраивать для этого ничего не нужно — правило вычисляется из заголовка
+    Host, то есть из адреса, по которому обратились к самому bridge.
+    """
+    from app.main import cors_allowed
+
+    assert cors_allowed("http://192.168.200.251:9118", "192.168.200.251:8000")
+    assert cors_allowed("http://localhost:3000", "localhost:8000")
+
+
+def test_cors_rejects_other_host():
+    """Чужой сайт не пройдёт: origin проставляет браузер, подделать нельзя."""
+    from app.main import cors_allowed
+
+    assert not cors_allowed("http://evil.example", "192.168.200.251:8000")
+    assert not cors_allowed("https://evil.example", "localhost:8000")
+
+
+def test_cors_rejects_null_origin_unless_listed(monkeypatch):
+    """origin=null (упакованный вебвью) — только явным перечислением."""
+    from app.config import settings
+    from app.main import cors_allowed
+
+    assert not cors_allowed("null", "192.168.200.251:8000")
+
+    monkeypatch.setenv("CORS_ORIGINS", "null")
+    settings.cache_clear()
+    assert cors_allowed("null", "192.168.200.251:8000")
+    settings.cache_clear()
+
+
+def test_cors_rejects_empty_origin():
+    from app.main import cors_allowed
+
+    assert not cors_allowed("", "192.168.200.251:8000")
+
+
+def test_cors_explicit_list_still_works(monkeypatch):
+    from app.config import settings
+    from app.main import cors_allowed
+
+    monkeypatch.setenv("CORS_ORIGINS", "https://lampa.example.com")
+    settings.cache_clear()
+    assert cors_allowed("https://lampa.example.com", "other.host:8000")
+    assert not cors_allowed("https://other.example.com", "other.host:8000")
+    settings.cache_clear()
+
+
+def test_wildcard_rejected_at_config(monkeypatch):
+    """«*» пускает любую страницу делать заказы. Сервис не должен подниматься.
+
+    Проверяется в конфигурации, а не только тестом: неверная настройка обязана
+    падать, а не работать «почти правильно».
+    """
+    import pytest
+
+    from app.config import settings
+
+    monkeypatch.setenv("CORS_ORIGINS", "*")
+    settings.cache_clear()
+    with pytest.raises(ValueError, match=r"\*"):
+        settings().cors_origin_list
+    settings.cache_clear()
+
+
+def test_ipv6_host_parsed():
+    from app.main import cors_allowed
+
+    assert cors_allowed("http://[::1]:9118", "[::1]:8000")
