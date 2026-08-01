@@ -15,7 +15,14 @@ cd "$(dirname "$0")/.."
 set -a; . ./.env; set +a
 
 : "${DATA_ROOT:?не задан DATA_ROOT}"
-: "${TMDB_TOKEN:?не задан TMDB_TOKEN}"
+: "${RADARR_API_KEY:?не задан RADARR_API_KEY}"
+: "${TEST_RADARR_ROOT:?не задан TEST_RADARR_ROOT}"
+: "${RADARR_PROFILE:?не задан RADARR_PROFILE}"
+
+RADARR="http://localhost:7878"
+r_get()  { curl -fsS -H "X-Api-Key: $RADARR_API_KEY" "$RADARR/api/v3$1" "${@:2}"; }
+r_post() { curl -fsS -X POST -H "X-Api-Key: $RADARR_API_KEY" \
+             -H 'Content-Type: application/json' -d "$2" "$RADARR/api/v3$1"; }
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "нужна утилита $1" >&2; exit 1; }; }
 need curl; need jq; need yq
@@ -45,19 +52,47 @@ if [ -z "$URL" ] || [ "$URL" = null ]; then
 fi
 
 # ---------------------------------------------------------------------------
-echo "==> разрешаю tmdb_id через TMDB API"
+echo "==> разрешаю tmdb_id"
 # ---------------------------------------------------------------------------
 # Идентификатор именно разрешается, а не берётся из головы: неверный tmdb_id
 # приведёт к тому, что тест проверит не тот фильм.
-TMDB_JSON="$(curl -fsS -H "Authorization: Bearer $TMDB_TOKEN" \
-  --get "https://api.themoviedb.org/3/search/movie" \
-  --data-urlencode "query=$TITLE" \
-  --data-urlencode "year=$YEAR")"
+#
+# Основной путь — TMDB. Запасной, когда токена ещё нет, — собственный лукап
+# Radarr: он ходит в метаданные сам, нашего токена не требует.
+#
+# ВАЖНО про запасной путь. Он допустим ТОЛЬКО здесь, для стенда, и ТОЛЬКО с
+# точным совпадением названия И года И единственным кандидатом. В bridge
+# поиск по названию запрещён (см. таблицу подмен в CLAUDE.md): там нечёткое
+# совпадение притащило бы не тот тайтл, и никто бы этого не заметил. Здесь
+# результат сверяется с catalog.yml по двум полям и при неоднозначности
+# скрипт отказывается работать, а не берёт первый попавшийся.
+if [ -n "${TMDB_TOKEN:-}" ]; then
+  echo "    источник: TMDB API"
+  TMDB_JSON="$(curl -fsS -H "Authorization: Bearer $TMDB_TOKEN" \
+    --get "https://api.themoviedb.org/3/search/movie" \
+    --data-urlencode "query=$TITLE" \
+    --data-urlencode "year=$YEAR")"
+  MATCHES="$(echo "$TMDB_JSON" | jq --arg t "$TITLE" --argjson y "$YEAR" \
+    '[.results[] | select(.title==$t and (.release_date // "" | startswith($y|tostring)))]')"
+  ID_FIELD=id
+else
+  echo "    источник: лукап Radarr (TMDB_TOKEN не задан)"
+  LOOKUP="$(r_get "/movie/lookup" --get --data-urlencode "term=$TITLE")"
+  MATCHES="$(echo "$LOOKUP" | jq --arg t "$TITLE" --argjson y "$YEAR" \
+    '[.[] | select(.title==$t and .year==$y)]')"
+  ID_FIELD=tmdbId
+fi
 
-TMDB_ID="$(echo "$TMDB_JSON" | jq -r '.results[0].id // empty')"
-FOUND="$(echo "$TMDB_JSON" | jq -r '.results[0].title // empty')"
-[ -n "$TMDB_ID" ] || { echo "ОТКАЗ: «$TITLE» ($YEAR) не найден в TMDB." >&2; exit 1; }
-echo "    tmdb_id=$TMDB_ID  ($FOUND)"
+N="$(echo "$MATCHES" | jq 'length')"
+if [ "$N" != 1 ]; then
+  echo "ОТКАЗ: по «$TITLE» ($YEAR) найдено кандидатов: $N, а нужен ровно один." >&2
+  echo "$MATCHES" | jq -r ".[] | \"     \(.$ID_FIELD)  \(.title)\"" >&2
+  echo "Неоднозначность здесь означает, что стенд проверял бы не тот фильм." >&2
+  exit 1
+fi
+TMDB_ID="$(echo "$MATCHES" | jq -r ".[0].$ID_FIELD")"
+FOUND="$(echo "$MATCHES" | jq -r '.[0].title')"
+echo "    tmdb_id=$TMDB_ID  ($FOUND, $YEAR)"
 
 # ---------------------------------------------------------------------------
 echo "==> скачиваю материал"
@@ -100,6 +135,44 @@ else
   transmission-create -p -t "http://localhost:6969/announce" -o "$TFILE" "$DEST_DIR"
 fi
 echo "    $TFILE"
+
+# ---------------------------------------------------------------------------
+echo "==> добавляю фильм в Radarr"
+# ---------------------------------------------------------------------------
+# Без этого шага импортировать не во что: Radarr сопоставляет завершённую
+# загрузку с фильмом из своей библиотеки, а не заводит его сам.
+#
+# Стенд идёт в ОТДЕЛЬНЫЙ тестовый root folder и помечается тегом из TEST_TAG,
+# чтобы потом отличить и снести целиком, не разбирая настоящую библиотеку.
+if r_get /movie | jq -e --argjson id "$TMDB_ID" 'any(.[]; .tmdbId==$id)' >/dev/null; then
+  echo "    уже в библиотеке Radarr"
+else
+  PROFILE_ID="$(r_get /qualityprofile | jq -r --arg n "$RADARR_PROFILE" \
+    '.[] | select(.name==$n) | .id')"
+  [ -n "$PROFILE_ID" ] || { echo "ОТКАЗ: профиль «$RADARR_PROFILE» не найден" >&2; exit 1; }
+
+  TAG_ID="$(r_get /tag | jq -r --arg l "${TEST_TAG:-test}" '.[] | select(.label==$l) | .id')"
+  if [ -z "$TAG_ID" ]; then
+    TAG_ID="$(r_post /tag "$(jq -n --arg l "${TEST_TAG:-test}" '{label:$l}')" | jq -r .id)"
+  fi
+
+  # Шаблон — объект от самого Radarr, а не собранный руками: состав полей
+  # MovieResource по памяти не воспроизводится.
+  BODY="$(r_get "/movie/lookup/tmdb?tmdbId=$TMDB_ID" | jq \
+    --argjson p "$PROFILE_ID" --arg root "$TEST_RADARR_ROOT" \
+    --argjson tag "$TAG_ID" --arg ma "${RADARR_MIN_AVAILABILITY:-released}" '
+      . + { qualityProfileId: $p,
+            rootFolderPath:   $root,
+            minimumAvailability: $ma,
+            monitored: true,
+            tags: [$tag],
+            # Поиск не запускается: релиз уже лежит локально, индексаторов
+            # нет, а в dev-режиме реальная загрузка не вызывается вообще.
+            addOptions: { searchForMovie: false } }')"
+
+  r_post /movie "$BODY" >/dev/null
+  echo "    добавлен в $TEST_RADARR_ROOT, профиль $RADARR_PROFILE, тег ${TEST_TAG:-test}"
+fi
 
 # ---------------------------------------------------------------------------
 echo "==> добавляю в qBittorrent"

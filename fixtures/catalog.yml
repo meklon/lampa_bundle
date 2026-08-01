@@ -18,7 +18,13 @@ movies:
   - title: Big Buck Bunny
     year: 2008
     licence: CC-BY
-    url: ""            # ЗАПОЛНИТЬ: прямая ссылка на 1080p mp4/mkv
+    # Web seed из .torrent на webtorrent.io: файл доступен по обычному HTTPS.
+    # Сам .torrent оттуда НЕ используется — в нём udp- и wss-трекеры, из-за
+    # которых qBittorrent полез бы в сеть. Торрент собирается локально.
+    # Проверено 2026-08-01: 200, 276134947 байт, совпадает с length в .torrent.
+    # ffprobe: 1920x1080 h264, 634.6 с, аудио mp3 2.0 и ac3 5.1 —
+    # release_name ниже не врёт про 1080p и x264.
+    url: "https://webtorrent.io/torrents/Big%20Buck%20Bunny/Big%20Buck%20Bunny.mp4"
     release_name: Big.Buck.Bunny.2008.1080p.WEB-DL.x264-TEST
     category: radarr
 
