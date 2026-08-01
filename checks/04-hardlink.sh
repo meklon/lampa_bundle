@@ -28,33 +28,52 @@ if [ -z "$FILES" ]; then
   finish
 fi
 
-echo "$FILES" | while IFS= read -r f; do
+TOTAL="$(printf '%s\n' "$FILES" | grep -c .)"
+info "медиафайлов найдено: $TOTAL"
+
+# Два обязательных момента в этом цикле.
+#
+# 1. Ввод подаётся здесь-строкой, а не конвейером: конвейер уводит тело цикла
+#    в подоболочку, и присвоение FAILED из неё не возвращается наружу.
+# 2. Каждому docker compose exec подставляется </dev/null. Без этого exec
+#    читает stdin цикла и съедает оставшиеся строки: проверенным оказывается
+#    ровно ОДИН файл из скольких угодно, а остальные молча пропускаются —
+#    ровно тот сорт тихой поломки, ради которого эта проверка написана.
+CHECKED=0
+while IFS= read -r f; do
   [ -n "$f" ] || continue
-  LINKS="$(docker compose exec -T radarr stat -c %h "$f" 2>/dev/null | tr -d '\r')"
-  INODE="$(docker compose exec -T radarr stat -c %i "$f" 2>/dev/null | tr -d '\r')"
+  CHECKED=$((CHECKED + 1))
+  LINKS="$(docker compose exec -T radarr stat -c %h "$f" 2>/dev/null </dev/null | tr -d '\r')"
+  INODE="$(docker compose exec -T radarr stat -c %i "$f" 2>/dev/null </dev/null | tr -d '\r')"
 
   if [ "${LINKS:-1}" -ge 2 ] 2>/dev/null; then
     # Ссылка есть — убедимся, что вторая копия действительно в torrents
     TWIN="$(docker compose exec -T radarr sh -c \
-      "find /data/torrents -inum $INODE -type f 2>/dev/null | head -1" | tr -d '\r')"
+      "find /data/torrents -inum $INODE -type f 2>/dev/null | head -1" </dev/null | tr -d '\r')"
     if [ -n "$TWIN" ]; then
       printf '  [ok]   %s\n' "$(basename "$f") (ссылок: $LINKS)"
       printf '         парная запись: %s\n' "$TWIN"
     else
       printf '  [FAIL] %s: ссылок %s, но парной записи в /data/torrents нет\n' \
         "$(basename "$f")" "$LINKS"
-      echo fail > "${TMPDIR:-/tmp}/.hl_fail"
+      FAILED=1
     fi
   else
     printf '  [FAIL] %s: ссылок %s — это КОПИЯ, а не жёсткая ссылка\n' \
       "$(basename "$f")" "${LINKS:-?}"
-    echo fail > "${TMPDIR:-/tmp}/.hl_fail"
+    FAILED=1
   fi
-done
+done <<EOF
+$FILES
+EOF
 
-if [ -f "${TMPDIR:-/tmp}/.hl_fail" ]; then
-  rm -f "${TMPDIR:-/tmp}/.hl_fail"
-  FAILED=1
+# Страховка от повторения той же ошибки: если проверено не столько файлов,
+# сколько найдено, проверка обязана упасть, а не отчитаться зелёным.
+if [ "$CHECKED" != "$TOTAL" ]; then
+  bad "проверено $CHECKED файлов из $TOTAL — часть пропущена"
+fi
+
+if [ "$FAILED" -ne 0 ]; then
   echo
   info "СТОП-УСЛОВИЕ №3."
   info "Причина почти всегда в раздельных монтированиях — см. checks/02."

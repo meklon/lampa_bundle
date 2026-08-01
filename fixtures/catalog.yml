@@ -50,10 +50,17 @@ movies:
 # Держать ТОЛЬКО в выбрасываемом тестовом root folder (TEST_SONARR_ROOT),
 # чтобы потом не разбирать это в настоящей библиотеке.
 series:
-  - tmdb_id: null      # ЗАПОЛНИТЬ: любой реальный сериал, у которого
-                       # в TMDB external_ids ЕСТЬ tvdb_id
+  # Разрешено через TMDB 2026-08-01, не вписано по памяти:
+  #   /search/tv?query=Breaking Bad&first_air_date_year=2008 -> ровно 1 кандидат
+  #   /tv/1396/external_ids -> tvdb_id=81189
+  # Статус Ended: сериал не идёт, поэтому краевой случай с дописыванием
+  # эпизодов в текущий сезон (открытый вопрос №2) сюда не примешивается.
+  - tmdb_id: 1396
+    title: Breaking Bad
+    year: 2008
+    tvdb_id: 81189     # справочно; скрипт всё равно перезапрашивает у TMDB
     season: 1
     episode: 1
     source_file: Big Buck Bunny
-    release_name: ""   # ЗАПОЛНИТЬ по релизной конвенции с SxxEyy
+    release_name: Breaking.Bad.S01E01.1080p.WEB-DL.x264-TEST
     category: sonarr

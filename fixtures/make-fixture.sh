@@ -36,6 +36,148 @@ command -v mktorrent >/dev/null 2>&1 && TORRENT_TOOL=mktorrent
 WHICH="${1:-Big Buck Bunny}"
 mkdir -p fixtures/data
 
+# ===========================================================================
+# Сериальная ветка: ./fixtures/make-fixture.sh series
+# ===========================================================================
+# Сериалов с открытой лицензией и записью в TVDB практически нет, поэтому
+# берётся tvdb_id настоящего сериала, а файлом кладётся та же короткометражка
+# под именем SxxEyy. Sonarr сопоставляет по имени, а не по содержимому,
+# так что импорт проверяется честно.
+#
+# Живёт ТОЛЬКО в выбрасываемом TEST_SONARR_ROOT.
+if [ "$WHICH" = series ]; then
+  : "${SONARR_API_KEY:?не задан SONARR_API_KEY}"
+  : "${TEST_SONARR_ROOT:?не задан TEST_SONARR_ROOT}"
+  : "${SONARR_PROFILE:?не задан SONARR_PROFILE}"
+  : "${TMDB_TOKEN:?нужен TMDB_TOKEN: Sonarr работает по TVDB, а перевод
+     TMDB->TVDB делается только через TMDB. Лукап Radarr тут не заменяет}"
+
+  SONARR="http://localhost:8989"
+  s_get()  { curl -fsS -H "X-Api-Key: $SONARR_API_KEY" "$SONARR/api/v3$1" "${@:2}"; }
+  s_post() { curl -fsS -X POST -H "X-Api-Key: $SONARR_API_KEY" \
+               -H 'Content-Type: application/json' -d "$2" "$SONARR/api/v3$1"; }
+
+  q() { yq -r ".series[0].$1" fixtures/catalog.yml; }
+  S_TMDB="$(q tmdb_id)"; S_TITLE="$(q title)"; S_SEASON="$(q season)"
+  S_EPISODE="$(q episode)"; S_SRC="$(q source_file)"; S_REL="$(q release_name)"
+
+  for v in S_TMDB S_TITLE S_SEASON S_EPISODE S_SRC S_REL; do
+    case "${!v}" in ""|null)
+      echo "ОТКАЗ: в catalog.yml не заполнено series[0].$v" >&2; exit 1 ;;
+    esac
+  done
+
+  # -------------------------------------------------------------------------
+  echo "==> перевожу tmdb_id -> tvdb_id через TMDB"
+  # -------------------------------------------------------------------------
+  # Ровно то, чем занимается bridge. Идентификатор перезапрашивается, а не
+  # берётся из catalog.yml: там он только справочный.
+  EXT_IDS="$(curl -fsS -H "Authorization: Bearer $TMDB_TOKEN" \
+    "https://api.themoviedb.org/3/tv/$S_TMDB/external_ids")"
+  S_TVDB="$(echo "$EXT_IDS" | jq -r '.tvdb_id // empty')"
+  if [ -z "$S_TVDB" ] || [ "$S_TVDB" = null ]; then
+    echo "ОТКАЗ: у tmdb_id=$S_TMDB нет tvdb_id в TMDB." >&2
+    echo "Возьми другой сериал: Sonarr без tvdb_id добавить нельзя." >&2
+    exit 1
+  fi
+  echo "    $S_TITLE: tmdb_id=$S_TMDB -> tvdb_id=$S_TVDB"
+
+  # -------------------------------------------------------------------------
+  echo "==> готовлю файл эпизода"
+  # -------------------------------------------------------------------------
+  SRC_REL="$(yq -r ".movies[] | select(.title==\"$S_SRC\") | .release_name" fixtures/catalog.yml)"
+  SRC_FILE="$(find fixtures/data -maxdepth 1 -type f -name "$SRC_REL.*" | head -1)"
+  if [ -z "$SRC_FILE" ]; then
+    echo "ОТКАЗ: нет исходника «$S_SRC» в fixtures/data/." >&2
+    echo "Сначала собери фильмовую фикстуру: ./fixtures/make-fixture.sh" >&2
+    exit 1
+  fi
+  S_EXT="${SRC_FILE##*.}"
+  S_DEST="$DATA_ROOT/torrents/tv/$S_REL"
+  mkdir -p "$S_DEST"
+  cp --update=none "$SRC_FILE" "$S_DEST/${S_REL}.${S_EXT}"
+  chown -R "${PUID}:${PGID}" "$S_DEST"
+  echo "    $S_DEST/${S_REL}.${S_EXT}"
+
+  # -------------------------------------------------------------------------
+  echo "==> добавляю сериал в Sonarr"
+  # -------------------------------------------------------------------------
+  if s_get /series | jq -e --argjson id "$S_TVDB" 'any(.[]; .tvdbId==$id)' >/dev/null; then
+    echo "    уже в библиотеке Sonarr"
+  else
+    S_PROFILE="$(s_get /qualityprofile | jq -r --arg n "$SONARR_PROFILE" \
+      '.[] | select(.name==$n) | .id')"
+    [ -n "$S_PROFILE" ] || { echo "ОТКАЗ: профиль «$SONARR_PROFILE» не найден" >&2; exit 1; }
+
+    S_TAG="$(s_get /tag | jq -r --arg l "${TEST_TAG:-test}" '.[] | select(.label==$l) | .id')"
+    if [ -z "$S_TAG" ]; then
+      S_TAG="$(s_post /tag "$(jq -n --arg l "${TEST_TAG:-test}" '{label:$l}')" | jq -r .id)"
+    fi
+
+    # Шаблон — от самого Sonarr, по ТОЧНОМУ tvdb-идентификатору.
+    # Это не запрещённый поиск по названию: tvdb_id уже получен от TMDB,
+    # lookup здесь только отдаёт форму объекта.
+    TPL="$(s_get /series/lookup --get --data-urlencode "term=tvdb:$S_TVDB")"
+    [ "$(echo "$TPL" | jq 'length')" = 1 ] \
+      || { echo "ОТКАЗ: lookup по tvdb:$S_TVDB вернул не одного кандидата" >&2; exit 1; }
+
+    # monitorNewItems="none" обязателен: по умолчанию "all", и тогда заказ
+    # одного сезона превращается в подписку на сериал. seasonFolder по
+    # умолчанию false, а docs/NAMING.md требует папки сезонов.
+    S_BODY="$(echo "$TPL" | jq --argjson p "$S_PROFILE" --arg root "$TEST_SONARR_ROOT" \
+      --argjson tag "$S_TAG" '.[0] + {
+        qualityProfileId: $p,
+        rootFolderPath:   $root,
+        monitored:        true,
+        seasonFolder:     true,
+        monitorNewItems:  "none",
+        tags:             [$tag],
+        addOptions: { searchForMissingEpisodes: false, searchForCutoffUnmetEpisodes: false }
+      }')"
+    s_post /series "$S_BODY" >/dev/null
+    echo "    добавлен в $TEST_SONARR_ROOT, monitorNewItems=none, seasonFolder=true"
+  fi
+
+  # -------------------------------------------------------------------------
+  echo "==> создаю .torrent и добавляю в qBittorrent"
+  # -------------------------------------------------------------------------
+  S_TFILE="fixtures/${S_REL}.torrent"
+  rm -f "$S_TFILE"
+  if [ "$TORRENT_TOOL" = mktorrent ]; then
+    mktorrent -p -a "http://localhost:6969/announce" -o "$S_TFILE" "$S_DEST"
+  else
+    transmission-create -p -t "http://localhost:6969/announce" -o "$S_TFILE" "$S_DEST"
+  fi
+
+  QBT="http://localhost:8081"
+  S_COOKIE="${TMPDIR:-/tmp}/qbt.fixture.tv.cookie"
+  curl -fsS -c "$S_COOKIE" -H "Referer: $QBT" \
+    --data-urlencode "username=${QBITTORRENT_USER}" \
+    --data-urlencode "password=${QBITTORRENT_PASSWORD}" \
+    "$QBT/api/v2/auth/login" >/dev/null
+  curl -fsS -b "$S_COOKIE" -H "Referer: $QBT" -X POST "$QBT/api/v2/torrents/add" \
+    -F "torrents=@${S_TFILE}" \
+    -F "category=sonarr" \
+    -F "savepath=/data/torrents/tv" \
+    -F "skip_checking=false" >/dev/null
+  rm -f "$S_COOKIE"
+
+  cat <<EOF
+
+Готово.
+
+  сериал:    $S_TITLE  S$(printf '%02d' "$S_SEASON")E$(printf '%02d' "$S_EPISODE")
+  tmdb_id:   $S_TMDB  ->  tvdb_id: $S_TVDB
+  релиз:     $S_REL
+  данные:    $S_DEST
+
+Дальше:
+  ./checks/04-hardlink.sh
+  ./checks/06-bridge-season.sh $S_TMDB $S_SEASON     (после этапа 5)
+EOF
+  exit 0
+fi
+
 TITLE="$(yq -r ".movies[] | select(.title==\"$WHICH\") | .title" fixtures/catalog.yml)"
 YEAR="$(yq  -r ".movies[] | select(.title==\"$WHICH\") | .year"  fixtures/catalog.yml)"
 URL="$(yq   -r ".movies[] | select(.title==\"$WHICH\") | .url"   fixtures/catalog.yml)"
