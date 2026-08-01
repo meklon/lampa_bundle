@@ -170,7 +170,7 @@ async def _order_season(
     numbers = await tmdb.tv_season_numbers(tmdb_id)
     if numbers and season not in numbers:
         raise SeasonOutOfRange(
-            f"у сериала нет сезона {season}; есть: " f"{', '.join(str(n) for n in sorted(numbers))}"
+            f"у сериала нет сезона {season}; есть: {', '.join(str(n) for n in sorted(numbers))}"
         )
 
     # Обязательный шаг: Sonarr не принимает tmdbId.
