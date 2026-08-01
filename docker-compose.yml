@@ -5,6 +5,19 @@
 # КРИТИЧНО: у всех сервисов ОДНО монтирование ${DATA_ROOT}:/data.
 # Не разделять на /downloads и /movies — сломаются жёсткие ссылки.
 
+# ВЕРСИИ ОБРАЗОВ зафиксированы прямо здесь, значениями по умолчанию.
+#
+# Причина: набор проверен именно на этих версиях, и человек, поднимающий его
+# впервые, не должен подбирать теги сам. Переопределить можно переменной в
+# .env — синтаксис ${VAR:-умолчание} берёт её, если задана.
+#
+# Обновление версий — правка этого файла, а не .env: она проходит проверку
+# схем (scripts/check-versions.sh) и попадает в историю. Миграции БД у *arr
+# односторонние, поэтому версия — часть кода, а не локальная настройка.
+#
+# Проверено на: Radarr 6.3.0.10514, Sonarr 4.0.19.2979, Prowlarr 2.5.2.5491,
+# qBittorrent 5.2.3 (libtorrent v2.0.13), Lampac 1.4.3 — 2026-08-01.
+
 # Ротация логов. Драйвер json-file по умолчанию растёт без предела и однажды
 # съедает диск — на домашнем сервере это обнаруживается по полному разделу.
 x-logging: &logging
@@ -43,7 +56,7 @@ services:
     logging: *logging
 
   qbittorrent:
-    image: lscr.io/linuxserver/qbittorrent:${QBITTORRENT_TAG}
+    image: lscr.io/linuxserver/qbittorrent:${QBITTORRENT_TAG:-5.2.3_v2.0.13-ls469}
     container_name: qbittorrent
     environment:
       - PUID=${PUID}
@@ -75,7 +88,7 @@ services:
     restart: unless-stopped
 
   prowlarr:
-    image: lscr.io/linuxserver/prowlarr:${PROWLARR_TAG}
+    image: lscr.io/linuxserver/prowlarr:${PROWLARR_TAG:-2.5.2.5491-ls155}
     container_name: prowlarr
     environment:
       - PUID=${PUID}
@@ -99,7 +112,7 @@ services:
     restart: unless-stopped
 
   radarr:
-    image: lscr.io/linuxserver/radarr:${RADARR_TAG}
+    image: lscr.io/linuxserver/radarr:${RADARR_TAG:-6.3.0.10514-ls312}
     container_name: radarr
     environment:
       - PUID=${PUID}
@@ -127,7 +140,7 @@ services:
     restart: unless-stopped
 
   sonarr:
-    image: lscr.io/linuxserver/sonarr:${SONARR_TAG}
+    image: lscr.io/linuxserver/sonarr:${SONARR_TAG:-4.0.19.2979-ls320}
     container_name: sonarr
     environment:
       - PUID=${PUID}
@@ -219,7 +232,7 @@ services:
   # Файл лежит в git (lampac/init.conf), а не в config/: это декларативная
   # настройка, а не состояние сервиса.
   lampac:
-    image: ghcr.io/lampac-nextgen/lampac:${LAMPAC_TAG}
+    image: ghcr.io/lampac-nextgen/lampac:${LAMPAC_TAG:-1.4.3}
     container_name: lampac
     environment:
       - TZ=${TZ}
