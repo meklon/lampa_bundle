@@ -348,9 +348,38 @@ Radarr считает, что фильм ещё не вышел, добавле�
 основной источник — TMDB, а не CUB. Читать сразу при открытии карточки
 нельзя: нужно дождаться полной загрузки данных карточки.
 
-Конкретный механизм — какое событие слушать, где лежит тип контента —
-уточнить по локально собранной документации и рабочему примеру, см.
-`OPEN-QUESTIONS.md`. Рабочий основной источник — TMDB; CUB не поддерживается.
+Механизм найден в исходниках `yumata/lampa-source` (этап 6), не по памяти:
+
+| Что | Где в исходниках |
+|---|---|
+| `Lampa.Listener.send('full', {type: 'complite', object, data})` — отправляется **после** полной загрузки карточки | `src/components/full.js:216` |
+| второе событие `type: 'build'` — приходит раньше, данных ещё нет | `src/components/full.js:272` |
+| `object.method` различает `'tv'` и `'movie'` | `src/core/api/sources/tmdb.js:561` |
+| `data.movie` — сырой json TMDB: `id`, `title`/`name`, `seasons[]`, `number_of_seasons` | там же |
+| сезоны считаются по `episode_count > 0` | `src/utils/utils.js:637` |
+| блок кнопок `.full-start-new__buttons`, кнопка `.full-start__button.selector` | `src/templates/full/start_new.js:27` |
+| `.view--torrent` скрывается настройкой — как якорь ненадёжен | `src/components/full/start.js:81` |
+| `window.Lampa`: `Listener`, `Noty`, `Select`, `Controller`, `Activity`, `Lang` | `src/app.js:272` |
+| `Select.show({title, items, onSelect, onBack})` | `src/interaction/select.js:130` |
+| `Noty.show(text, params)` | `src/interaction/noty.js:13` |
+
+Рабочий образец подписки — `plugins/online/online.js:233`.
+
+**Практический вывод:** подписываться на `full` и обрабатывать только
+`complite`. На `build` идентификаторов ещё нет — это и есть та асинхронность,
+о которой предупреждает первый абзац.
+
+Рабочий основной источник — TMDB; CUB не поддерживается.
+
+## 3.5 Адрес bridge выводится, а не задаётся
+
+Плагин исполняется в странице Lampa, поэтому относительный `fetch('/order')`
+ушёл бы на origin Lampa, а не bridge. В production это один хост, при
+локальной отладке — разные (Lampa на `:3000`, bridge на `:8000`), и там
+относительный путь молча промахнулся бы.
+
+Адрес берётся из `document.currentScript.src` — то есть из адреса, по которому
+браузер загрузил сам плагин. Хардкода нет, настраивать нечего.
 
 ## 3.3 Секреты
 

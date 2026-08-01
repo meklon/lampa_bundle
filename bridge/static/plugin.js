@@ -9,80 +9,174 @@
  * В плагине должно быть нечего ломать. Вся хрупкая логика — в bridge, где
  * её можно логировать и тестировать.
  *
- * СЕКРЕТОВ ЗДЕСЬ НЕТ И БЫТЬ НЕ МОЖЕТ. Только адрес bridge. Код исполняется
- * в браузерной странице; если Lampa открыта не со своего хоста, всё её
- * содержимое доступно чужой странице. Проверяется grep'ом, см.
- * docs/ACCEPTANCE.md, этап 6.
+ * СЕКРЕТОВ ЗДЕСЬ НЕТ И БЫТЬ НЕ МОЖЕТ. Только адрес bridge, и тот выводится
+ * из адреса самого файла. Код исполняется в браузерной странице; если Lampa
+ * открыта не со своего хоста, всё её содержимое доступно чужой странице.
+ * Проверяется grep'ом, см. docs/ACCEPTANCE.md, этап 6.
  *
  * Отладка: логи bridge. Он пишет каждый входящий запрос — тыкаешь в
  * интерфейсе, смотришь, что реально пришло.
+ *
+ * ---------------------------------------------------------------------------
+ * ОТКУДА ВЗЯТ API. Не из интернета и не по памяти — из исходников Lampa:
+ *
+ *   src/components/full.js:216
+ *     Lampa.Listener.send('full', {type: 'complite', object, data, ...})
+ *     отправляется ПОСЛЕ полной загрузки карточки. Это и есть ответ на
+ *     «идентификаторы разрешаются асинхронно»: раньше данных просто нет.
+ *
+ *   src/core/api/sources/tmdb.js:561   — params.method различает 'tv' и 'movie'
+ *   src/utils/utils.js:637             — countSeasons(): сезоны с episode_count > 0
+ *   src/templates/full/start_new.js:27 — блок .full-start-new__buttons,
+ *                                        кнопка = .full-start__button.selector
+ *   src/components/full/start.js:81    — .view--torrent скрывается настройкой
+ *   src/app.js:272                     — window.Lampa: Listener, Noty, Select,
+ *                                        Controller, Activity, Lang
+ *   src/interaction/select.js:130      — Select.show({title, items, onSelect, onBack})
+ *   src/interaction/noty.js:13         — Noty.show(text, params)
+ *
+ *   Рабочий образец подписки: plugins/online/online.js:233
+ * ---------------------------------------------------------------------------
  */
 
 (function () {
   'use strict';
 
-  // Адрес bridge. Плагин отдаётся тем же bridge с того же origin, поэтому
-  // относительный путь предпочтителен: CORS не возникает по определению.
-  // Абсолютный адрес — только если плагин размещён отдельно.
-  var BRIDGE = '';               // '' => тот же origin
+  // Адрес bridge выводится из адреса этого же файла.
+  //
+  // Относительный путь не годится: плагин исполняется в странице Lampa, и
+  // fetch('/order') ушёл бы на origin Lampa, а не bridge. В production это
+  // один и тот же хост, при локальной отладке — разные (Lampa на :3000,
+  // bridge на :8000), и там относительный путь молча промахнулся бы.
+  //
+  // Хардкода адреса нет: он и так известен браузеру — по нему загружен этот
+  // файл.
+  var BRIDGE = (function () {
+    var src = '';
+    if (document.currentScript && document.currentScript.src) {
+      src = document.currentScript.src;
+    } else {
+      var tags = document.getElementsByTagName('script');
+      for (var i = tags.length - 1; i >= 0; i--) {
+        if (tags[i].src && tags[i].src.indexOf('plugin.js') !== -1) {
+          src = tags[i].src;
+          break;
+        }
+      }
+    }
+    if (!src) return '';
+    var a = document.createElement('a');
+    a.href = src;
+    return a.protocol + '//' + a.host;
+  })();
+
   var ORDER_PATH = '/order';
 
   // -------------------------------------------------------------------------
-  // НЕ РЕАЛИЗОВАНО: получение данных карточки.
-  //
-  // ИЗВЕСТНО ТОЧНО:
-  //   - идентификаторы в карточке разрешаются АСИНХРОННО, с задержкой,
-  //     особенно когда основной источник — TMDB, а не CUB
-  //   - читать сразу при открытии карточки НЕЛЬЗЯ, нужно дождаться полной
-  //     загрузки данных
-  //   - рабочий основной источник — TMDB; CUB не поддерживается
-  //
-  // НЕИЗВЕСТНО: какое событие слушать, какой объект опрашивать, где именно
-  // лежит тип контента, как корректно добавить кнопку в карточку.
-  //
-  // ГДЕ УЗНАТЬ (в интернете этого нет, там только каталоги плагинов):
-  //   1. npm run doc в yumata/lampa-source -> build/doc/index.html
-  //   2. рабочий плагин с исходниками: and7ey/lampa
-  //   3. npm run start и смотреть в консоли браузера
-  //
-  // Создание issue в lampa-source закрыто; вопросы — в Telegram-каналы проекта.
-  //
-  // НЕ УГАДЫВАТЬ. Открытый вопрос №4 в docs/OPEN-QUESTIONS.md.
+  // Чтение карточки
   // -------------------------------------------------------------------------
 
   /**
-   * Достаёт {tmdb_id, type, seasons} из полностью загруженной карточки.
-   * @returns {{tmdb_id:number, type:'movie'|'tv', seasons:number[]}|null}
+   * Достаёт данные из полностью загруженной карточки.
+   * @returns {{tmdb_id:number, type:'movie'|'tv', seasons:number[], title:string}|null}
    */
-  function readCard(/* activity */) {
-    throw new Error('readCard не реализован: см. OPEN-QUESTIONS.md, пункт 4');
-  }
+  function readCard(e) {
+    var movie = e.data && e.data.movie;
+    if (!movie || !movie.id) return null;
 
-  /**
-   * Подписка на готовность карточки. Обязана срабатывать ПОСЛЕ разрешения
-   * идентификаторов, а не при открытии.
-   */
-  function onCardReady(/* handler */) {
-    throw new Error('onCardReady не реализован: см. OPEN-QUESTIONS.md, пункт 4');
-  }
+    // Тип берётся из object.method — так его различает и сам источник данных.
+    // Наличие number_of_seasons используется лишь как запасной признак, если
+    // method почему-то не проставлен.
+    var method = e.object && e.object.method;
+    var type = method === 'tv' || (!method && movie.number_of_seasons) ? 'tv' : 'movie';
 
-  /** Добавляет кнопку в карточку. */
-  function addButton(/* label, handler */) {
-    throw new Error('addButton не реализован: см. OPEN-QUESTIONS.md, пункт 4');
-  }
+    // Сезоны — только реально существующие. Пустые (episode_count == 0)
+    // отбрасываются по той же логике, что в utils.js countSeasons().
+    // Сезон 0 (спецвыпуски) остаётся: номер валидный, bridge его принимает.
+    var seasons = [];
+    if (type === 'tv' && Array.isArray(movie.seasons)) {
+      for (var i = 0; i < movie.seasons.length; i++) {
+        var s = movie.seasons[i];
+        if (s && s.episode_count > 0 && typeof s.season_number === 'number') {
+          seasons.push(s.season_number);
+        }
+      }
+    }
 
-  /** Выбор сезона. Показывать только для type === 'tv'. */
-  function pickSeason(/* seasons, callback */) {
-    throw new Error('pickSeason не реализован: см. OPEN-QUESTIONS.md, пункт 4');
-  }
-
-  /** Уведомление. Текст берётся из detail ответа bridge и показывается КАК ЕСТЬ. */
-  function notify(/* message */) {
-    throw new Error('notify не реализован: см. OPEN-QUESTIONS.md, пункт 4');
+    return {
+      tmdb_id: movie.id,
+      type: type,
+      seasons: seasons,
+      title: movie.title || movie.name || String(movie.id)
+    };
   }
 
   // -------------------------------------------------------------------------
-  // Реализовано: отправка заказа. Эта часть от внутренностей Lampa не зависит.
+  // Интерфейс
+  // -------------------------------------------------------------------------
+
+  function notify(message) {
+    if (window.Lampa && Lampa.Noty) Lampa.Noty.show(message);
+    else console.log('[order]', message);
+  }
+
+  function addButton(e, card) {
+    var root = e.object.activity.render();
+
+    // 'complite' приходит и при возврате в карточку. Кнопка должна остаться
+    // одна.
+    if (root.find('.view--order').length) return;
+
+    var btn = $(
+      '<div class="full-start__button selector view--order">' +
+        '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" ' +
+        'stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>' +
+        '</svg>' +
+        '<span>Заказать</span>' +
+        '</div>'
+    );
+
+    btn.on('hover:enter', function () {
+      handleOrder(card);
+    });
+
+    // Рядом с кнопкой торрентов, если она есть, иначе в конец блока кнопок:
+    // .view--torrent скрывается, когда торренты отключены в настройках.
+    var torrent = root.find('.view--torrent');
+    if (torrent.length) torrent.after(btn);
+    else root.find('.full-start-new__buttons').append(btn);
+  }
+
+  function pickSeason(card, callback) {
+    if (!card.seasons.length) {
+      // Сезонов в данных нет — не выдумываем номер, говорим прямо.
+      notify('У сериала не видно сезонов, заказывать нечего');
+      return;
+    }
+
+    // Куда вернуть управление после закрытия списка.
+    var back = Lampa.Controller.enabled().name;
+
+    var items = card.seasons.map(function (n) {
+      return { title: n === 0 ? 'Спецвыпуски' : 'Сезон ' + n, season: n };
+    });
+
+    Lampa.Select.show({
+      title: 'Какой сезон заказать',
+      items: items,
+      onSelect: function (item) {
+        Lampa.Controller.toggle(back);
+        callback(item.season);
+      },
+      onBack: function () {
+        Lampa.Controller.toggle(back);
+      }
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Отправка заказа. От внутренностей Lampa не зависит.
   // -------------------------------------------------------------------------
 
   function sendOrder(payload, done) {
@@ -112,28 +206,36 @@
 
   function handleOrder(card) {
     function fire(season) {
-      sendOrder(
-        { tmdb_id: card.tmdb_id, type: card.type, season: season },
-        function (err, message) {
-          notify(err ? err.message : message);
-        }
-      );
+      notify('Отправляю: ' + card.title);
+      sendOrder({ tmdb_id: card.tmdb_id, type: card.type, season: season }, function (err, message) {
+        // detail из ответа bridge показывается КАК ЕСТЬ: он человекочитаемый
+        // и по-русски, это часть контракта (docs/SPEC.md 2.3).
+        notify(err ? err.message : message);
+      });
     }
 
-    if (card.type === 'tv') {
-      pickSeason(card.seasons, fire);
-    } else {
-      fire(null);
-    }
+    if (card.type === 'tv') pickSeason(card, fire);
+    else fire(null);
   }
 
+  // -------------------------------------------------------------------------
+
   function init() {
-    onCardReady(function (activity) {
-      var card = readCard(activity);
+    if (!window.Lampa || !Lampa.Listener) {
+      console.log('[order] Lampa не найдена, плагин не запущен');
+      return;
+    }
+
+    Lampa.Listener.follow('full', function (e) {
+      // Только 'complite'. При 'build' идентификаторы ещё не разрешены — это
+      // и есть та асинхронность, из-за которой читать карточку сразу при
+      // открытии нельзя.
+      if (e.type !== 'complite') return;
+
+      var card = readCard(e);
       if (!card) return;
-      addButton('Заказать', function () {
-        handleOrder(card);
-      });
+
+      addButton(e, card);
     });
   }
 
