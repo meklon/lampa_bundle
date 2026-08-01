@@ -1,8 +1,17 @@
 # CI: проверки на каждый push, публикация образов по тегу.
 #
-# НЕ ПРОВЕРЕН НА ЖИВОМ ЗАПУСКЕ. Написан по документации Actions, но ни разу не
-# выполнялся: у агента нет доступа к GitHub Actions. Первый прогон покажет
-# опечатки — это ожидаемо, а не признак поломки замысла.
+# Проверен на живых прогонах. Первые два упали, и оба падения были полезны —
+# они поймали то, что локально не воспроизводится по построению:
+#
+#   1. shellcheck: на runner'е нет .env (он в .gitignore), и стало видно, что
+#      директива disable=SC1091 стояла не перед той командой. Локально файл
+#      есть, предупреждение не возникало вовсе.
+#   2. ruff: pre-commit держал одну версию, pyproject просил другую, и один
+#      инструмент давал два вердикта. Версия теперь закреплена в обоих местах.
+#
+# Задача smoke — главная: она доказывает, что для запуска достаточно
+# docker-compose.yml и .env, и делает это на чужой машине, а не на стенде
+# автора.
 name: CI
 
 on:
@@ -95,8 +104,8 @@ jobs:
           file: provision/Dockerfile
           push: ${{ startsWith(github.ref, 'refs/tags/v') }}
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/media-stack:${{ steps.version.outputs.value }}
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/media-stack:latest
+            ${{ env.REGISTRY }}/${{ github.repository }}/media-stack:${{ steps.version.outputs.value }}
+            ${{ env.REGISTRY }}/${{ github.repository }}/media-stack:latest
 
       - name: media-stack-bridge
         uses: docker/build-push-action@v5
@@ -104,8 +113,8 @@ jobs:
           context: ./bridge
           push: ${{ startsWith(github.ref, 'refs/tags/v') }}
           tags: |
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/media-stack-bridge:${{ steps.version.outputs.value }}
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/media-stack-bridge:latest
+            ${{ env.REGISTRY }}/${{ github.repository }}/bridge:${{ steps.version.outputs.value }}
+            ${{ env.REGISTRY }}/${{ github.repository }}/bridge:latest
 
   smoke:
     name: Стек поднимается из двух файлов

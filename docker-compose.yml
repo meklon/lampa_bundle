@@ -37,7 +37,7 @@ services:
   #
   # Ключи API сюда не попали: *arr берут их из переменных окружения.
   init:
-    image: ${STACK_IMAGE:-ghcr.io/meklon/media-stack}:${STACK_VERSION:-latest}
+    image: ${STACK_IMAGE:-ghcr.io/meklon/lampa_bundle/media-stack}:${STACK_VERSION:-latest}
     container_name: init
     volumes:
       - ${DATA_ROOT}:/data
@@ -170,7 +170,7 @@ services:
     # Только опубликованный образ. Сборка из исходников вынесена в
     # docker-compose.dev.yml: этот файл раздаётся отдельно от репозитория, и
     # ссылка на ./bridge на сервере указывала бы в никуда.
-    image: ${BRIDGE_IMAGE:-ghcr.io/meklon/media-stack-bridge}:${STACK_VERSION:-latest}
+    image: ${BRIDGE_IMAGE:-ghcr.io/meklon/lampa_bundle/bridge}:${STACK_VERSION:-latest}
     container_name: bridge
     environment:
       - BRIDGE_ENV=${BRIDGE_ENV}
@@ -271,7 +271,7 @@ services:
   # restart: no — сервис одноразовый: отработал и вышел. Ненулевой код виден
   # в `compose ps` и в логах, то есть сломанная настройка не проходит молча.
   provision:
-    image: ${STACK_IMAGE:-ghcr.io/meklon/media-stack}:${STACK_VERSION:-latest}
+    image: ${STACK_IMAGE:-ghcr.io/meklon/lampa_bundle/media-stack}:${STACK_VERSION:-latest}
     container_name: provision
     depends_on:
       qbittorrent:

@@ -22,8 +22,8 @@
 
 | Образ | Что внутри |
 |---|---|
-| `ghcr.io/<owner>/media-stack` | провижининг, `init.py`, умолчания схемы имён |
-| `ghcr.io/<owner>/media-stack-bridge` | bridge и `plugin.js` |
+| `ghcr.io/meklon/lampa_bundle/media-stack` | провижининг, `init.py`, умолчания схемы имён |
+| `ghcr.io/meklon/lampa_bundle/bridge` | bridge и `plugin.js` |
 
 Репозиторий на сервере не нужен: ни `git`, ни исходников, ни сборки. Это же
 делает установку пригодной для Ansible — два `template` и один вызов
@@ -50,7 +50,7 @@
 | Prowlarr | 9696 | `lscr.io/linuxserver/prowlarr` |
 | Radarr | 7878 | `lscr.io/linuxserver/radarr` |
 | Sonarr | 8989 | `lscr.io/linuxserver/sonarr` |
-| bridge | 8000 | собирается из `bridge/` |
+| bridge | 8000 | `ghcr.io/meklon/lampa_bundle/bridge` |
 | Lampac | 9118 | `ghcr.io/lampac-nextgen/lampac`, **часть стека** |
 
 Порт qBittorrent переназначен с 8080 на 8081: по умолчанию и у него, и у
