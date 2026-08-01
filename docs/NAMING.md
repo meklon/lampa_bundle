@@ -13,22 +13,51 @@ Kodi придётся переименовывать всё разом.
 
 ---
 
-## ВНИМАНИЕ: строки токенов не заполнены намеренно
+## Откуда взяты строки
 
-Токены переименования Radarr и Sonarr **не воспроизводятся по памяти**.
-Они менялись между версиями, и ошибка в них тихо приводит к неправильным
-именам во всей библиотеке.
+Из машиночитаемого источника TRaSH Guides, не с отрендеренной страницы: в
+markdown там только Jinja-подстановки вида
+`{{ radarr['naming']['radarr-naming']['file']['standard'] }}`, самих строк нет.
 
-Заполнить одним из двух способов:
+| Файл | Коммит | Дата |
+|---|---|---|
+| `TRaSH-Guides/Guides:docs/json/radarr/naming/radarr-naming.json` | `29ab6e5ed003` | 2026-04-01 |
+| `TRaSH-Guides/Guides:docs/json/sonarr/naming/sonarr-naming.json` | `a7e9914d454b` | 2026-06-06 |
 
-1. Взять готовые рекомендованные строки из TRaSH Guides
-   (`trash-guides.info`, разделы Radarr/Sonarr → Recommended Naming Scheme)
-2. Настроить схему в веб-морде, затем скопировать итоговую строку:
-   - Radarr: `GET /api/v3/config/naming`
-   - Sonarr: `GET /api/v3/config/naming`
+Взяты варианты **Standard**, а не Plex, Emby или Jellyfin: те добавляют в имя
+`{imdb-…}` или `[tmdbid-…]` для чужих скраперов, а у нас метаданные пишет
+только Kodi.
 
-После заполнения — это источник истины, и `provision`-скрипты берут значения
-отсюда.
+Токен `{[Custom Formats]}` отрендерится пустым — custom formats не
+настраиваются. Это безвредно и оставлено, чтобы строка совпадала с
+рекомендованной посимвольно.
+
+---
+
+## Проверено на живых инстансах
+
+Опрошены `GET /api/v3/config/naming` у Radarr 6.3.0.10514 и Sonarr
+4.0.19.2979 (2026-08-01). Расхождения с тем, что можно было бы предположить:
+
+**`colonReplacementFormat` у двух приложений разного типа.** Radarr отдаёт
+строку `"smart"`, Sonarr — целое `4`, и у Sonarr есть дополнительное поле
+`customColonReplacementFormat`. Одно имя поля, разные типы. Расшифровки
+числового enum'а в ответе живого инстанса нет — она будет в схеме на этапе 4.
+
+**Поэтому поле не трогаем.** Оба инстанса уже стоят на Smart Replace по
+умолчанию, что совпадает с рекомендацией TRaSH. Подставлять числовое значение
+по догадке — ровно то, от чего предостерегает `CLAUDE.md`.
+
+**У Sonarr есть поля, которых в этом файле раньше не было:**
+`specialsFolderFormat` (по умолчанию `Specials`) и `multiEpisodeStyle`.
+Оставлены по умолчанию.
+
+**Переименование по умолчанию выключено** в обоих: `renameMovies: false`,
+`renameEpisodes: false`. Без включения схема не применяется вообще — файлы
+импортируются под релизными именами.
+
+**`seasonFolderFormat` по умолчанию `Season {season}`, без ведущего нуля.**
+Требуется `Season {season:00}`, то есть это поле обязательно меняем.
 
 ---
 
@@ -39,7 +68,7 @@ Kodi придётся переименовывать всё разом.
 ```
 /data/media/movies/
 └── <Название> (<Год>)/
-    └── <Название> (<Год>) <качество и прочее>.mkv
+    └── <Название> (<Год>) - <качество и прочее>.mkv
 ```
 
 Отдельная папка на фильм, совпадающая с названием, — это то, на что
@@ -50,53 +79,65 @@ Kodi придётся переименовывать всё разом.
 
 ```
 /data/media/tv/
-└── <Название>/
+└── <Название> (<Год>)/
     └── Season <NN>/
-        └── <Название> - S<NN>E<MM> - <Название эпизода> <прочее>.mkv
+        └── <Название> (<Год>) - S<NN>E<MM> - <Название эпизода> <прочее>.mkv
 ```
 
-Папки сезонов обязательны (`seasonFolder: true`).
+Папки сезонов обязательны (`seasonFolder: true`), номер сезона с ведущим
+нулём.
+
+Год в имени папки сериала — осознанное решение: он снимает неоднозначность
+при скрапинге, когда существуют ремейк и оригинал с одинаковым названием.
+Раньше в этом файле было написано без года; изменено вместе с принятием
+строк TRaSH.
 
 ---
 
 ## Строки конфигурации
 
-Заполнить перед этапом 2.
-
 ### Radarr
 
 ```
-standardMovieFormat  =
-movieFolderFormat    =
+standardMovieFormat  = {Movie CleanTitle} {(Release Year)} - {{Edition Tags}} {[MediaInfo 3D]}{[Custom Formats]}{[Quality Full]}{[Mediainfo AudioCodec}{ Mediainfo AudioChannels]}{[MediaInfo VideoDynamicRangeType]}{[Mediainfo VideoCodec]}{-Release Group}
+movieFolderFormat    = {Movie CleanTitle} ({Release Year})
 renameMovies         = true
 replaceIllegalCharacters = true
-colonReplacementFormat   =
+colonReplacementFormat   = не трогаем, остаётся "smart"
 ```
 
 ### Sonarr
 
 ```
-standardEpisodeFormat  =
-dailyEpisodeFormat     =
-animeEpisodeFormat     =
-seriesFolderFormat     =
-seasonFolderFormat     =
+standardEpisodeFormat  = {Series CleanTitleWithoutYear} {(Series Year)} - S{season:00}E{episode:00} - {Episode CleanTitle:90} {[Custom Formats]}{[Quality Full]}{[Mediainfo AudioCodec}{ Mediainfo AudioChannels]}{[MediaInfo VideoDynamicRangeType]}{[Mediainfo VideoCodec]}{-Release Group}
+dailyEpisodeFormat     = {Series CleanTitleWithoutYear} {(Series Year)} - {Air-Date} - {Episode CleanTitle:90} {[Custom Formats]}{[Quality Full]}{[Mediainfo AudioCodec}{ Mediainfo AudioChannels]}{[MediaInfo VideoDynamicRangeType]}{[Mediainfo VideoCodec]}{-Release Group}
+animeEpisodeFormat     = {Series CleanTitleWithoutYear} {(Series Year)} - S{season:00}E{episode:00} - {absolute:000} - {Episode CleanTitle:90} {[Custom Formats]}{[Quality Full]}{[Mediainfo AudioCodec}{ Mediainfo AudioChannels]}{MediaInfo AudioLanguages}{[MediaInfo VideoDynamicRangeType]}[{Mediainfo VideoCodec }{MediaInfo VideoBitDepth}bit]{-Release Group}
+seriesFolderFormat     = {Series CleanTitleWithoutYear} {(Series Year)}
+seasonFolderFormat     = Season {season:00}
 renameEpisodes         = true
 replaceIllegalCharacters = true
-colonReplacementFormat   =
+colonReplacementFormat   = не трогаем, остаётся 4
 ```
 
 ---
 
 ## Ожидаемые имена для тестового стенда
 
-Заполняется после того, как схема выбрана. Используется в
-`fixtures/catalog.yml` и в `checks/07-pipeline.sh` как эталон.
+Используется в `fixtures/catalog.yml` и в `checks/07-pipeline.sh` как эталон.
 
 | Материал | Ожидаемый путь после импорта |
 |---|---|
-| Big Buck Bunny (2008) | |
-| тестовый эпизод | |
+| Big Buck Bunny (2008) | `movies/Big Buck Bunny (2008)/Big Buck Bunny (2008) - […].mkv` |
+| тестовый эпизод | заполняется вместе с выбором сериала, см. блокировку Б1 |
+
+**`[…]` — хвост, зависящий от MediaInfo:** качество, аудиокодек, число
+каналов, видеокодек. Определяется анализом файла и заполняется на этапе 3 из
+фактического импорта, с разбором каждого отличия. Вписывать сюда догадку
+нельзя: тогда `checks/07-pipeline.sh` упадёт на неверном ожидании, а не на
+реальном расхождении схемы.
+
+Предсказуемая часть — имя папки — зафиксирована уже сейчас, и именно она
+важна скраперу Kodi.
 
 Если фактический путь после импорта не совпал с ожидаемым — это расхождение
 схемы, а не мелочь: исправлять надо схему, а не ожидание в тесте.
