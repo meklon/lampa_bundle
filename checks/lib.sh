@@ -12,8 +12,14 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# shellcheck disable=SC1091
-set -a; . "$ROOT/.env"; set +a
+# .env создаётся человеком и в git не попадает, поэтому статически его не
+# прочитать. Директива стоит вплотную к самой команде подключения: применяется
+# она к СЛЕДУЮЩЕЙ команде, а в строке "set -a; . …; set +a" следующей была бы
+# "set -a" — предупреждение так и не гасилось.
+set -a
+# shellcheck source=/dev/null
+. "$ROOT/.env"
+set +a
 
 RADARR="http://localhost:7878"
 SONARR="http://localhost:8989"
