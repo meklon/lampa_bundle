@@ -37,8 +37,11 @@ STATIC = Path(__file__).parent.parent / "static"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     s = settings()
-    log.info("bridge стартует, BRIDGE_ENV=%s, поиск %s",
-             s.bridge_env, "включён" if s.search_enabled else "ВЫКЛЮЧЕН")
+    log.info(
+        "bridge стартует, BRIDGE_ENV=%s, поиск %s",
+        s.bridge_env,
+        "включён" if s.search_enabled else "ВЫКЛЮЧЕН",
+    )
     async with httpx.AsyncClient() as client:
         app.state.http = client
         yield
@@ -150,8 +153,7 @@ async def _order_season(
     numbers = await tmdb.tv_season_numbers(tmdb_id)
     if numbers and season not in numbers:
         raise SeasonOutOfRange(
-            f"у сериала нет сезона {season}; есть: "
-            f"{', '.join(str(n) for n in sorted(numbers))}"
+            f"у сериала нет сезона {season}; есть: " f"{', '.join(str(n) for n in sorted(numbers))}"
         )
 
     # Обязательный шаг: Sonarr не принимает tmdbId.

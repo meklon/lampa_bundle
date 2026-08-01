@@ -24,9 +24,10 @@ check() {
   fi
 
   # Ищем схему, в имени которой встречается версия живого инстанса.
-  local found=""
-  for f in openapi/${svc}-*.json; do
+  local found="" have=""
+  for f in "openapi/${svc}"-*.json; do
     [ -e "$f" ] || continue
+    have="$have $f"
     case "$f" in *"$live"*) found="$f" ;; esac
   done
 
@@ -34,7 +35,7 @@ check() {
     echo "[ok] $svc $live  <-  $found"
   else
     echo "[!!] $svc: живой инстанс $live, схемы под эту версию в openapi/ нет"
-    echo "     есть: $(ls openapi/${svc}-*.json 2>/dev/null | tr '\n' ' ')"
+    echo "     есть:${have:- (ни одной)}"
     echo "     СТОП-УСЛОВИЕ №2. Скачай схему под $live через fetch-openapi.sh"
     FAIL=1
   fi

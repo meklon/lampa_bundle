@@ -73,9 +73,7 @@ class Radarr:
 
     # -- добавление ----------------------------------------------------------
 
-    def _build_add_payload(
-        self, tmdb_id: int, profile_id: int, root: str, search: bool
-    ) -> dict:
+    def _build_add_payload(self, tmdb_id: int, profile_id: int, root: str, search: bool) -> dict:
         """Тело запроса POST /api/v3/movie.
 
         НЕ РЕАЛИЗОВАНО НАМЕРЕННО.
@@ -99,9 +97,7 @@ class Radarr:
         Если ожидаемого поля в схеме нет — СТОП-УСЛОВИЕ №1: остановиться и
         написать отчёт. НЕ подставлять имя «по смыслу».
         """
-        raise NotImplementedError(
-            "заполнить по openapi/radarr-v3-*.json, схема MovieResource"
-        )
+        raise NotImplementedError("заполнить по openapi/radarr-v3-*.json, схема MovieResource")
 
     async def add_movie(self, tmdb_id: int, search: bool) -> dict:
         profile = await self.profile_id(self._s.radarr_profile)

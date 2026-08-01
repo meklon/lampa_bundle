@@ -37,8 +37,7 @@ if [ "${N:-0}" -ge 1 ]; then
 fi
 
 title "Файл лежит по ожидаемому пути"
-docker compose exec -T radarr test -f "/data/media/$EXPECTED_REL" 2>/dev/null
-if [ $? -eq 0 ]; then
+if docker compose exec -T radarr test -f "/data/media/$EXPECTED_REL" 2>/dev/null; then
   ok "$EXPECTED_REL"
 else
   bad "файла нет: /data/media/$EXPECTED_REL"

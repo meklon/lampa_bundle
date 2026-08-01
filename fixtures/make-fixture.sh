@@ -34,7 +34,10 @@ YEAR="$(yq  -r ".movies[] | select(.title==\"$WHICH\") | .year"  fixtures/catalo
 URL="$(yq   -r ".movies[] | select(.title==\"$WHICH\") | .url"   fixtures/catalog.yml)"
 RELNAME="$(yq -r ".movies[] | select(.title==\"$WHICH\") | .release_name" fixtures/catalog.yml)"
 
-[ -n "$TITLE" ] && [ "$TITLE" != null ] || { echo "нет записи «$WHICH» в catalog.yml" >&2; exit 1; }
+if [ -z "$TITLE" ] || [ "$TITLE" = null ]; then
+  echo "нет записи «$WHICH» в catalog.yml" >&2
+  exit 1
+fi
 if [ -z "$URL" ] || [ "$URL" = null ]; then
   echo "ОТКАЗ: в catalog.yml не заполнен url для «$TITLE»." >&2
   echo "Заполни прямой ссылкой на видеофайл и проверь, что она рабочая." >&2

@@ -5,7 +5,6 @@
 """
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -34,6 +33,7 @@ def env(monkeypatch):
         monkeypatch.setenv(k, v)
 
     from app.config import settings
+
     settings.cache_clear()
     yield
     settings.cache_clear()

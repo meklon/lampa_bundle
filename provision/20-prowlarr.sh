@@ -56,7 +56,10 @@ step "Prowlarr: Sonarr"
 ensure_app "Sonarr"
 
 step "Prowlarr: проверка соединений"
-arr_post "$PROWLARR" "$PROWLARR_API_KEY" v1 /applications/testall '{}' >/dev/null \
-  && log "testall прошёл" || die "testall не прошёл"
+if arr_post "$PROWLARR" "$PROWLARR_API_KEY" v1 /applications/testall '{}' >/dev/null; then
+  log "testall прошёл"
+else
+  die "testall не прошёл"
+fi
 
 log "готово. Индексаторы добавляет человек, вручную, на последнем этапе."

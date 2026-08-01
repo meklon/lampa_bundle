@@ -8,6 +8,10 @@
 # внутри config/-томов, который в git не попадает. Настроенное руками через
 # веб-морду не видно в PR, стирается откатом снапшота ВМ и не воспроизводится
 # на сервере.
+#
+# Файл только подключается, сам не запускается: адреса и функции ниже
+# потребляются provision-скриптами.
+# shellcheck disable=SC2034
 
 set -euo pipefail
 
@@ -49,8 +53,8 @@ arr_put() {
 
 # wait_api <base> <key> <api> — ждём готовности сервиса
 wait_api() {
-  local base="$1" key="$2" api="$3" i
-  for i in $(seq 1 60); do
+  local base="$1" key="$2" api="$3"
+  for _ in $(seq 1 60); do
     if curl -fsS -H "X-Api-Key: $key" "$base/api/$api/system/status" \
         >/dev/null 2>&1; then
       return 0

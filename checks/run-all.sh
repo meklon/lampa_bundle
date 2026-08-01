@@ -5,7 +5,7 @@
 # и запускаются отдельно. См. docs/ACCEPTANCE.md.
 set -uo pipefail
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit 1
 RC=0
 
 for c in 01-containers.sh 02-data-layout.sh 03-prowlarr-sync.sh 04-hardlink.sh; do

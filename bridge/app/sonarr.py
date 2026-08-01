@@ -106,9 +106,7 @@ class Sonarr:
 
         Если ожидаемого поля в схеме нет — СТОП-УСЛОВИЕ №1.
         """
-        raise NotImplementedError(
-            "заполнить по openapi/sonarr-v3-*.json, схема SeriesResource"
-        )
+        raise NotImplementedError("заполнить по openapi/sonarr-v3-*.json, схема SeriesResource")
 
     async def add_series(self, tvdb_id: int) -> dict:
         """Добавляет сериал БЕЗ мониторинга сезонов."""
@@ -140,9 +138,7 @@ class Sonarr:
         Альтернатива — PUT /api/v3/series/{id} с изменённым массивом seasons.
         Выбрать по схеме, не по догадке.
         """
-        raise NotImplementedError(
-            "заполнить по openapi/sonarr-v3-*.json, схема SeasonPassResource"
-        )
+        raise NotImplementedError("заполнить по openapi/sonarr-v3-*.json, схема SeasonPassResource")
 
     async def set_season_monitored(self, series: dict, season: int) -> None:
         payload = self._build_seasonpass_payload(series, season)
