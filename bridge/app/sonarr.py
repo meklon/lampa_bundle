@@ -191,8 +191,7 @@ class Sonarr:
     async def add_series(self, tvdb_id: int, profile_name: str | None = None) -> dict:
         """Добавляет сериал БЕЗ мониторинга сезонов."""
         profile = await self.profile_id(profile_name or self._s.sonarr_profile)
-        # В dev — выбрасываемый тестовый каталог, а не настоящая библиотека.
-        root = await self.root_folder(self._s.sonarr_root_effective)
+        root = await self.root_folder(self._s.sonarr_root)
 
         title = await self.lookup_title(tvdb_id)
         tags = [await self.tag_id(self._s.test_tag)] if self._s.is_dev else None

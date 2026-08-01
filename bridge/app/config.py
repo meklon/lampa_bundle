@@ -30,15 +30,6 @@ class Settings(BaseSettings):
     sonarr_root: str
     sonarr_profile: str
 
-    # Тестовые root folder. CLAUDE.md: «Тестовые заказы идут в отдельный root
-    # folder и помечаются тегом из TEST_TAG». В dev-режиме заказы обязаны
-    # попадать сюда, а не в настоящую библиотеку — иначе отладочный цикл
-    # засоряет её, и разбирать потом руками.
-    # Это же проверяет checks/05-bridge-movie.sh: он сверяет rootFolderPath
-    # фильма именно с TEST_RADARR_ROOT.
-    test_radarr_root: str = "/data/media/_test_movies"
-    test_sonarr_root: str = "/data/media/_test_tv"
-
     tmdb_token: str
     tmdb_base: str = "https://api.themoviedb.org/3"
 
@@ -68,15 +59,6 @@ class Settings(BaseSettings):
     def search_enabled(self) -> bool:
         """В dev-режиме поиск не запускается ни при каких входных данных."""
         return not self.is_dev
-
-    @property
-    def radarr_root_effective(self) -> str:
-        """Куда реально добавлять фильм: в dev — в выбрасываемый каталог."""
-        return self.test_radarr_root if self.is_dev else self.radarr_root
-
-    @property
-    def sonarr_root_effective(self) -> str:
-        return self.test_sonarr_root if self.is_dev else self.sonarr_root
 
 
 @lru_cache

@@ -12,29 +12,16 @@ from app.radarr import Radarr
 from app.sonarr import Sonarr
 
 
-def test_dev_uses_test_root_folders():
-    """Тестовые заказы идут в отдельный root folder, не в библиотеку.
+def test_dev_orders_are_tagged():
+    """Заказы в dev-режиме помечаются тегом.
 
-    Это же сверяет checks/05-bridge-movie.sh: rootFolderPath фильма обязан
-    совпасть с TEST_RADARR_ROOT.
+    Отдельных root folder больше нет — они убраны как лишняя сущность.
+    Отличить отладочный заказ от настоящего и снести его одной командой
+    позволяет тег, и это единственный механизм, который для этого остался.
     """
     s = settings()
     assert s.is_dev
-    assert s.radarr_root_effective == s.test_radarr_root
-    assert s.sonarr_root_effective == s.test_sonarr_root
-    # И это НЕ боевые каталоги
-    assert s.radarr_root_effective != s.radarr_root
-    assert s.sonarr_root_effective != s.sonarr_root
-
-
-def test_prod_uses_real_root_folders(monkeypatch):
-    monkeypatch.setenv("BRIDGE_ENV", "prod")
-    settings.cache_clear()
-    s = settings()
-    assert s.is_dev is False
-    assert s.radarr_root_effective == s.radarr_root
-    assert s.sonarr_root_effective == s.sonarr_root
-    settings.cache_clear()
+    assert s.test_tag, "без тега отладочные заказы не отличить от настоящих"
 
 
 def test_search_never_enabled_in_dev():
@@ -55,7 +42,7 @@ def test_movie_payload_never_searches_in_dev(requested_search):
         tmdb_id=10378,
         title="Big Buck Bunny",
         profile_id=4,
-        root=s.radarr_root_effective,
+        root=s.radarr_root,
         search=effective,
     )
     assert body["addOptions"]["searchForMovie"] is False

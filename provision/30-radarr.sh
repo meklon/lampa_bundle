@@ -5,7 +5,6 @@
 
 : "${RADARR_API_KEY:?не задан RADARR_API_KEY}"
 : "${MOVIES_PATH:?не задан MOVIES_PATH}"
-: "${TEST_MOVIES_PATH:?не задан TEST_MOVIES_PATH}"
 
 wait_api "$RADARR" "$RADARR_API_KEY" v3
 
@@ -24,7 +23,6 @@ ensure_root() {
   fi
 }
 ensure_root "$MEDIA_MOVIES"
-ensure_root "$MEDIA_TEST_MOVIES"
 
 # ---------------------------------------------------------------------------
 step "Radarr: жёсткие ссылки вместо копирования"

@@ -13,8 +13,6 @@ set -a; . ./.env; set +a
 : "${TORRENTS_PATH:?не задан TORRENTS_PATH}"
 : "${MOVIES_PATH:?не задан MOVIES_PATH}"
 : "${TV_PATH:?не задан TV_PATH}"
-: "${TEST_MOVIES_PATH:?не задан TEST_MOVIES_PATH}"
-: "${TEST_TV_PATH:?не задан TEST_TV_PATH}"
 : "${PUID:?не задан PUID}"
 : "${PGID:?не задан PGID}"
 
@@ -32,8 +30,7 @@ case "$CANON" in
     ;;
 esac
 
-for d in "$TORRENTS_PATH/movies" "$TORRENTS_PATH/tv" \
-         "$MOVIES_PATH" "$TV_PATH" "$TEST_MOVIES_PATH" "$TEST_TV_PATH"; do
+for d in "$TORRENTS_PATH/movies" "$TORRENTS_PATH/tv" "$MOVIES_PATH" "$TV_PATH"; do
   mkdir -p "$DATA_ROOT/$d"
 done
 

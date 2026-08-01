@@ -186,8 +186,7 @@ class Radarr:
 
     async def add_movie(self, tmdb_id: int, search: bool, profile_name: str | None = None) -> dict:
         profile = await self.profile_id(profile_name or self._s.radarr_profile)
-        # В dev — выбрасываемый тестовый каталог, а не настоящая библиотека.
-        root = await self.root_folder(self._s.radarr_root_effective)
+        root = await self.root_folder(self._s.radarr_root)
 
         # Страховка на случай, если вызывающий передал search=True в dev
         effective_search = search and self._s.search_enabled

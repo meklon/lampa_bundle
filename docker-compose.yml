@@ -14,6 +14,34 @@ x-logging: &logging
     max-file: "3"
 
 services:
+  # Подготовка перед стартом. Делает то, что нельзя выразить переменными
+  # окружения: каталоги, пароль qBittorrent и — главное — ПРОВЕРКУ, что
+  # жёсткая ссылка между торрентами и библиотекой реально создаётся.
+  #
+  # Проверка стоит здесь, а не в отдельном скрипте, ровно потому, что должна
+  # валить развёртывание. Когда ссылка невозможна, *arr молча копируют:
+  # ошибки нет, место уходит вдвое, узнаёшь через месяц.
+  #
+  # Ключи API сюда не попали: *arr берут их из переменных окружения.
+  init:
+    image: python:3.12-alpine
+    container_name: init
+    volumes:
+      - ${DATA_ROOT}:/data
+      - ./config/qbittorrent:/qbt-config
+      - ./scripts:/scripts:ro
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TORRENTS_PATH=${TORRENTS_PATH}
+      - MOVIES_PATH=${MOVIES_PATH}
+      - TV_PATH=${TV_PATH}
+      - QBITTORRENT_USER=${QBITTORRENT_USER}
+      - QBITTORRENT_PASSWORD=${QBITTORRENT_PASSWORD}
+    command: ["python", "/scripts/init.py"]
+    restart: "no"
+    logging: *logging
+
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:${QBITTORRENT_TAG}
     container_name: qbittorrent
@@ -24,6 +52,9 @@ services:
       - TZ=${TZ}
       - WEBUI_PORT=8081
       - TORRENTING_PORT=6881
+    depends_on:
+      init:
+        condition: service_completed_successfully
     volumes:
       - ./config/qbittorrent:/config
       - ${DATA_ROOT}:/data
@@ -51,6 +82,9 @@ services:
       - PGID=${PGID}
       - UMASK=${UMASK}
       - TZ=${TZ}
+      # Ключ API задаётся переменной, а не выковыривается из config.xml после
+      # первого старта. Проверено: принимается и сохраняется.
+      - PROWLARR__AUTH__APIKEY=${PROWLARR_API_KEY}
     volumes:
       - ./config/prowlarr:/config
     ports:
@@ -72,6 +106,9 @@ services:
       - PGID=${PGID}
       - UMASK=${UMASK}
       - TZ=${TZ}
+      # Ключ API задаётся переменной, а не выковыривается из config.xml после
+      # первого старта. Проверено: принимается и сохраняется.
+      - RADARR__AUTH__APIKEY=${RADARR_API_KEY}
     volumes:
       - ./config/radarr:/config
       - ${DATA_ROOT}:/data
@@ -97,6 +134,9 @@ services:
       - PGID=${PGID}
       - UMASK=${UMASK}
       - TZ=${TZ}
+      # Ключ API задаётся переменной, а не выковыривается из config.xml после
+      # первого старта. Проверено: принимается и сохраняется.
+      - SONARR__AUTH__APIKEY=${SONARR_API_KEY}
     volumes:
       - ./config/sonarr:/config
       - ${DATA_ROOT}:/data
@@ -131,11 +171,9 @@ services:
       # Страница Lampa приходит с Lampac (:9118), bridge живёт на :8000 —
       # для браузера это разные origin, без CORS заказ не уйдёт.
       - CORS_ORIGINS=${CORS_ORIGINS}
-      # В dev-режиме заказы идут в тестовые root folder и метятся тегом:
-      # отладочный цикл не должен засорять настоящую библиотеку.
+      # Заказы в dev-режиме метятся тегом, чтобы их можно было снести
+      # по нему одной командой.
       - TEST_TAG=${TEST_TAG}
-      - TEST_RADARR_ROOT=/data/${TEST_MOVIES_PATH}
-      - TEST_SONARR_ROOT=/data/${TEST_TV_PATH}
     ports:
       - "8000:8000"
     depends_on:

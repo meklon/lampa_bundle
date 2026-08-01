@@ -9,7 +9,6 @@
 
 : "${SONARR_API_KEY:?не задан SONARR_API_KEY}"
 : "${TV_PATH:?не задан TV_PATH}"
-: "${TEST_TV_PATH:?не задан TEST_TV_PATH}"
 
 wait_api "$SONARR" "$SONARR_API_KEY" v3
 
@@ -28,7 +27,6 @@ ensure_root() {
   fi
 }
 ensure_root "$MEDIA_TV"
-ensure_root "$MEDIA_TEST_TV"
 
 # ---------------------------------------------------------------------------
 step "Sonarr: жёсткие ссылки и папки сезонов"

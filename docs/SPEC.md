@@ -98,10 +98,12 @@ ${DATA_ROOT}                      единственное монтирован�
 │   ├── movies                    категория qBittorrent "radarr"
 │   └── tv                        категория qBittorrent "sonarr"
 ├── ${MOVIES_PATH}                root folder Radarr
-├── ${TV_PATH}                    root folder Sonarr
-├── ${TEST_MOVIES_PATH}           тестовый root folder, выбрасывается
-└── ${TEST_TV_PATH}               тестовый root folder, выбрасывается
+└── ${TV_PATH}                    root folder Sonarr
 ```
+
+Отдельных тестовых root folder нет: заказы в dev-режиме идут в обычную
+библиотеку, но помечаются тегом из `TEST_TAG`. Тега достаточно, чтобы отличить
+их и снести одной командой.
 
 Пути настраиваются в `.env` и задаются **относительно** `DATA_ROOT`. По
 умолчанию `torrents`, `media/movies`, `media/tv`; можно указать на уже
