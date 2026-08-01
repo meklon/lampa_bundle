@@ -8,7 +8,7 @@ step "qBittorrent: вход"
 qbt_login >/dev/null
 
 step "qBittorrent: категории"
-EXISTING="$(curl -fsS -b "$QBT_COOKIE" "$QBT/api/v2/torrents/categories")"
+EXISTING="$(qbt_get /torrents/categories)"
 
 ensure_category() {
   local name="$1" path="$2"

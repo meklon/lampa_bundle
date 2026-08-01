@@ -78,13 +78,17 @@
 - [x] `docker-compose.yml`, `.env.example`, `.gitignore`, `.pre-commit-config.yaml` в репозитории
 - [x] `.env` заполнен: теги, `DATA_ROOT`, `PUID`/`PGID`, `UMASK=002`, `TZ`, `BRIDGE_ENV=dev`
 - [x] `scripts/init-data.sh` отработал, раскладка `/data` создана
-- [ ] Образы скачаны, стек поднят
-- [ ] Ключи API забраны из `config/<service>/config.xml` и дописаны в `.env`
-- [ ] Пароль qBittorrent из лога контейнера дописан в `.env`
-- [ ] Стек перезапущен с ключами
-- [ ] **`checks/01-containers.sh` прошла** — контейнеры `running`, *arr отвечают на `/api/v3/system/status` с нашим ключом, qBittorrent на `/api/v2/app/version` после логина, bridge на `/health`
-- [ ] **`checks/02-data-layout.sh` прошла** — каталоги на месте, владелец соответствует `PUID`/`PGID`, и главное: `stat -c %d /data/torrents` равен `stat -c %d /data/media` **внутри контейнера Radarr**
-- [ ] Отчёт `reports/stage-1-infra.md`
+- [x] Образы скачаны, стек поднят — пять контейнеров `running`
+- [x] Ключи API забраны из `config/<service>/config.xml` и дописаны в `.env`
+- [x] Пароль qBittorrent: временный меняется при каждом перезапуске, поэтому задан постоянный через `setPreferences` и записан в `.env`
+- [x] Стек перезапущен с ключами
+- [x] **`checks/01-containers.sh` прошла** — Radarr 6.3.0.10514, Sonarr 4.0.19.2979, Prowlarr 2.5.2.5491 отвечают с нашим ключом, qBittorrent v5.2.3 после логина, bridge `/health` 200
+- [x] **`checks/02-data-layout.sh` прошла** — внутри контейнера Radarr `stat -c %d` даёт 64770 и для `/data/torrents`, и для `/data/media`; `ln` отработал, иноды совпали
+- [x] Отчёт `reports/stage-1-infra.md`
+
+**Найдено на этом этапе:** WebUI qBittorrent 5.x отбивает `401`/`403` на любой
+вызов без заголовка `Referer`, а успешный логин отвечает `204` с пустым телом,
+а не строкой `Ok.`. Исправлено в пяти файлах, перенесено в `SPEC.md` 4.3.
 
 Проверка 02 обязана выполняться внутри контейнера: граница монтирования
 существует именно там. На хосте пути могут лежать на одной ФС, а в контейнере

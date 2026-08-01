@@ -20,12 +20,14 @@ fi
 
 title "Торрент в qBittorrent"
 COOKIE="${TMPDIR:-/tmp}/qbt.pipe.cookie"
-curl -fsS -c "$COOKIE" \
+# Referer обязателен: WebUI qBittorrent 5.x без него отвечает 403 на любой
+# вызов, включая логин. Проверено на 5.2.3.
+curl -fsS -c "$COOKIE" -H "Referer: $QBT" \
   --data-urlencode "username=${QBITTORRENT_USER:-}" \
   --data-urlencode "password=${QBITTORRENT_PASSWORD:-}" \
   "$QBT/api/v2/auth/login" >/dev/null 2>&1 || { bad "вход в qBittorrent не удался"; finish; }
 
-TORRENTS="$(curl -fsS -b "$COOKIE" "$QBT/api/v2/torrents/info?category=radarr" 2>/dev/null)"
+TORRENTS="$(curl -fsS -b "$COOKIE" -H "Referer: $QBT" "$QBT/api/v2/torrents/info?category=radarr" 2>/dev/null)"
 N="$(echo "$TORRENTS" | jq 'length' 2>/dev/null || echo 0)"
 assert_ge "торрентов в категории radarr" 1 "$N"
 
@@ -67,7 +69,7 @@ else
 fi
 
 title "Раздача не сломалась"
-STILL="$(curl -fsS -b "$COOKIE" "$QBT/api/v2/torrents/info?category=radarr" \
+STILL="$(curl -fsS -b "$COOKIE" -H "Referer: $QBT" "$QBT/api/v2/torrents/info?category=radarr" \
   | jq '[.[] | select(.state|test("seed|upload|stalledUP"))] | length' 2>/dev/null)"
 assert_ge "торрентов в состоянии раздачи" 1 "${STILL:-0}"
 info "Смысл жёсткой ссылки: файл одновременно в библиотеке и в раздаче,"

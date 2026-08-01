@@ -105,12 +105,15 @@ echo "    $TFILE"
 echo "==> добавляю в qBittorrent"
 # ---------------------------------------------------------------------------
 COOKIE="${TMPDIR:-/tmp}/qbt.fixture.cookie"
-curl -fsS -c "$COOKIE" \
+QBT="http://localhost:8081"
+# Referer обязателен: WebUI qBittorrent 5.x без него отвечает 403 на любой
+# вызов, включая логин. Проверено на 5.2.3.
+curl -fsS -c "$COOKIE" -H "Referer: $QBT" \
   --data-urlencode "username=${QBITTORRENT_USER}" \
   --data-urlencode "password=${QBITTORRENT_PASSWORD}" \
-  "http://localhost:8081/api/v2/auth/login" >/dev/null
+  "$QBT/api/v2/auth/login" >/dev/null
 
-curl -fsS -b "$COOKIE" -X POST "http://localhost:8081/api/v2/torrents/add" \
+curl -fsS -b "$COOKIE" -H "Referer: $QBT" -X POST "$QBT/api/v2/torrents/add" \
   -F "torrents=@${TFILE}" \
   -F "category=radarr" \
   -F "savepath=/data/torrents/movies" \

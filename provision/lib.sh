@@ -66,10 +66,15 @@ wait_api() {
 
 # qbt_login — печатает путь к cookie-файлу
 QBT_COOKIE="${TMPDIR:-/tmp}/qbt.cookie"
+
+# WebUI qBittorrent 5.x отбивает запросы без Referer, совпадающего с адресом
+# интерфейса: 403 на любой вызов, включая GET и сам логин. Проверено на
+# 5.2.3: без заголовка — 403, с ним — 204 на /auth/login. Поэтому Referer
+# идёт в каждый вызов, а не только в POST.
 qbt_login() {
   : "${QBITTORRENT_USER:?не задан QBITTORRENT_USER}"
   : "${QBITTORRENT_PASSWORD:?не задан QBITTORRENT_PASSWORD}"
-  curl -fsS -c "$QBT_COOKIE" \
+  curl -fsS -c "$QBT_COOKIE" -H "Referer: $QBT" \
     --data-urlencode "username=$QBITTORRENT_USER" \
     --data-urlencode "password=$QBITTORRENT_PASSWORD" \
     "$QBT/api/v2/auth/login" >/dev/null \
@@ -77,6 +82,10 @@ qbt_login() {
   echo "$QBT_COOKIE"
 }
 
+qbt_get() {
+  curl -fsS -b "$QBT_COOKIE" -H "Referer: $QBT" "$QBT/api/v2$1" "${@:2}"
+}
+
 qbt_post() {
-  curl -fsS -b "$QBT_COOKIE" -X POST "$QBT/api/v2$1" "${@:2}"
+  curl -fsS -b "$QBT_COOKIE" -H "Referer: $QBT" -X POST "$QBT/api/v2$1" "${@:2}"
 }

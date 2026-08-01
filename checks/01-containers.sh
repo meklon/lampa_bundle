@@ -28,11 +28,13 @@ check_arr Prowlarr "$PROWLARR" "${PROWLARR_API_KEY:-}" v1
 
 title "qBittorrent"
 COOKIE="${TMPDIR:-/tmp}/qbt.check.cookie"
-if curl -fsS -c "$COOKIE" \
+# Referer обязателен: WebUI qBittorrent 5.x без него отвечает 403 на любой
+# вызов, включая логин. Проверено на 5.2.3.
+if curl -fsS -c "$COOKIE" -H "Referer: $QBT" \
      --data-urlencode "username=${QBITTORRENT_USER:-}" \
      --data-urlencode "password=${QBITTORRENT_PASSWORD:-}" \
      "$QBT/api/v2/auth/login" >/dev/null 2>&1; then
-  V="$(curl -fsS -b "$COOKIE" "$QBT/api/v2/app/version" 2>/dev/null)"
+  V="$(curl -fsS -b "$COOKIE" -H "Referer: $QBT" "$QBT/api/v2/app/version" 2>/dev/null)"
   if [ -n "$V" ]; then
     ok "qBittorrent $V"
   else
