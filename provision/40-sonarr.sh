@@ -34,7 +34,11 @@ ensure_root "$TEST_SONARR_ROOT"
 step "Sonarr: жёсткие ссылки и папки сезонов"
 # ---------------------------------------------------------------------------
 MEDIAMGMT="$(arr_get "$SONARR" "$SONARR_API_KEY" v3 /config/mediamanagement)"
-PATCHED="$(echo "$MEDIAMGMT" | jq '.copyUsingHardlinks = true')"
+# enableMediaInfo — см. пояснение в 30-radarr.sh: от него зависят токены
+# качества и кодеков в схеме имён.
+PATCHED="$(echo "$MEDIAMGMT" | jq '
+  .copyUsingHardlinks = true
+  | .enableMediaInfo  = true')"
 arr_put "$SONARR" "$SONARR_API_KEY" v3 \
   "/config/mediamanagement/$(echo "$MEDIAMGMT" | jq -r .id)" "$PATCHED" >/dev/null
 log "copyUsingHardlinks = true"
@@ -63,14 +67,26 @@ CLIENTS="$(arr_get "$SONARR" "$SONARR_API_KEY" v3 /downloadclient)"
 if echo "$CLIENTS" | jq -e '.[] | select(.implementation=="QBittorrent")' >/dev/null; then
   log "qBittorrent уже настроен"
 else
-  # -------------------------------------------------------------------------
-  # СТОП: см. аналогичный блок в 30-radarr.sh. Форма DownloadClientResource
-  # берётся из openapi/sonarr-v3-*.json либо из GET /api/v3/downloadclient
-  # после ручной настройки. Категория обязана быть "sonarr".
-  # Стоп-условие №1.
-  # -------------------------------------------------------------------------
-  die "клиент загрузки не настроен и форма запроса не заполнена.
-     См. комментарий выше. Стоп-условие №1."
+  # То же, что в 30-radarr.sh, с одним отличием: поле категории здесь
+  # называется tvCategory, а не movieCategory. Проверено по
+  # /downloadclient/schema обоих приложений — состав полей совпадает целиком,
+  # кроме четырёх «movie*» против «tv*».
+  : "${QBITTORRENT_USER:?не задан QBITTORRENT_USER}"
+  : "${QBITTORRENT_PASSWORD:?не задан QBITTORRENT_PASSWORD}"
+
+  OBJ="$(schema_object "$SONARR" "$SONARR_API_KEY" v3 /downloadclient/schema QBittorrent)"
+  [ -n "$OBJ" ] || die "в /downloadclient/schema нет QBittorrent. Стоп-условие №1."
+
+  OBJ="$(set_field "$OBJ" host       "$(jq -n --arg v "$QBT_INTERNAL_HOST" '$v')")"
+  OBJ="$(set_field "$OBJ" port       "$(jq -n --argjson v "$QBT_INTERNAL_PORT" '$v')")"
+  OBJ="$(set_field "$OBJ" username   "$(jq -n --arg v "$QBITTORRENT_USER" '$v')")"
+  OBJ="$(set_field "$OBJ" password   "$(jq -n --arg v "$QBITTORRENT_PASSWORD" '$v')")"
+  OBJ="$(set_field "$OBJ" tvCategory "$(jq -n '"sonarr"')")"
+  OBJ="$(echo "$OBJ" | jq '.name = "qBittorrent" | .enable = true')"
+
+  log "создаю клиент загрузки qBittorrent, категория sonarr"
+  arr_post "$SONARR" "$SONARR_API_KEY" v3 /downloadclient "$OBJ" >/dev/null \
+    || die "Sonarr отказал при создании клиента загрузки"
 fi
 
 # ---------------------------------------------------------------------------
@@ -81,6 +97,12 @@ if ! grep -qE '^standardEpisodeFormat\s*=\s*\S' "$ROOT/docs/NAMING.md"; then
      Возьми рекомендованные строки из TRaSH Guides либо настрой схему
      в веб-морде и скопируй из GET /api/v3/config/naming."
 fi
-log "NAMING.md заполнен — применяю (реализовать чтение и PUT /config/naming)"
+
+# seasonFolderFormat по умолчанию "Season {season}", без ведущего нуля —
+# отсюда обязательное значение "Season {season:00}" в NAMING.md.
+apply_naming Sonarr "$SONARR" "$SONARR_API_KEY" v3 \
+  standardEpisodeFormat dailyEpisodeFormat animeEpisodeFormat \
+  seriesFolderFormat seasonFolderFormat renameEpisodes \
+  replaceIllegalCharacters colonReplacementFormat
 
 log "готово"

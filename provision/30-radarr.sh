@@ -33,7 +33,13 @@ step "Radarr: жёсткие ссылки вместо копирования"
 # копирует — ошибки нет, узнаёшь через месяц по свободному месту.
 # Проверяется отдельно: checks/04-hardlink.sh
 MEDIAMGMT="$(arr_get "$RADARR" "$RADARR_API_KEY" v3 /config/mediamanagement)"
-PATCHED="$(echo "$MEDIAMGMT" | jq '.copyUsingHardlinks = true | .importExtraFiles = false')"
+# enableMediaInfo задаётся явно, хотя и включён по умолчанию: от него зависят
+# токены {Quality Full}, {Mediainfo AudioCodec} и прочие в схеме имён. Выключен
+# — токены отрендерятся пустыми, и библиотека наполнится усечёнными именами.
+PATCHED="$(echo "$MEDIAMGMT" | jq '
+  .copyUsingHardlinks = true
+  | .importExtraFiles = false
+  | .enableMediaInfo  = true')"
 arr_put "$RADARR" "$RADARR_API_KEY" v3 \
   "/config/mediamanagement/$(echo "$MEDIAMGMT" | jq -r .id)" "$PATCHED" >/dev/null
 log "copyUsingHardlinks = true"
@@ -62,21 +68,32 @@ CLIENTS="$(arr_get "$RADARR" "$RADARR_API_KEY" v3 /downloadclient)"
 if echo "$CLIENTS" | jq -e '.[] | select(.implementation=="QBittorrent")' >/dev/null; then
   log "qBittorrent уже настроен"
 else
-  # -------------------------------------------------------------------------
-  # СТОП: точная форма DownloadClientResource не воспроизводится по памяти.
-  # Объект содержит implementation, configContract и массив fields
-  # (host, port, useSsl, username, password, movieCategory и др.),
-  # состав которых менялся между версиями.
+  # Шаблон берётся из GET /api/v3/downloadclient/schema самого Radarr.
+  # Правим только адрес, порт, учётные данные и категорию.
   #
-  # Порядок: взять схему из openapi/radarr-v3-*.json (DownloadClientResource),
-  # либо настроить клиент через веб-морду и забрать готовый объект через
-  # GET /api/v3/downloadclient как шаблон.
+  # Имя поля категории у Radarr и Sonarr РАЗНОЕ: здесь movieCategory,
+  # у Sonarr tvCategory. Значение "radarr" — та же категория, что создана
+  # в 10-qbittorrent.sh, она же определяет каталог загрузки.
   #
-  # Категория обязана быть "radarr" — она же задана в 10-qbittorrent.sh.
-  # Не подставлять имена полей «по смыслу» — стоп-условие №1.
-  # -------------------------------------------------------------------------
-  die "клиент загрузки не настроен и форма запроса не заполнена.
-     См. комментарий выше. Стоп-условие №1."
+  # host — имя сервиса в compose-сети, порт 8081 из WEBUI_PORT. Значения по
+  # умолчанию в схеме (localhost:8080) указывали бы на сам контейнер Radarr,
+  # да ещё и на порт Kodi.
+  : "${QBITTORRENT_USER:?не задан QBITTORRENT_USER}"
+  : "${QBITTORRENT_PASSWORD:?не задан QBITTORRENT_PASSWORD}"
+
+  OBJ="$(schema_object "$RADARR" "$RADARR_API_KEY" v3 /downloadclient/schema QBittorrent)"
+  [ -n "$OBJ" ] || die "в /downloadclient/schema нет QBittorrent. Стоп-условие №1."
+
+  OBJ="$(set_field "$OBJ" host          "$(jq -n --arg v "$QBT_INTERNAL_HOST" '$v')")"
+  OBJ="$(set_field "$OBJ" port          "$(jq -n --argjson v "$QBT_INTERNAL_PORT" '$v')")"
+  OBJ="$(set_field "$OBJ" username      "$(jq -n --arg v "$QBITTORRENT_USER" '$v')")"
+  OBJ="$(set_field "$OBJ" password      "$(jq -n --arg v "$QBITTORRENT_PASSWORD" '$v')")"
+  OBJ="$(set_field "$OBJ" movieCategory "$(jq -n '"radarr"')")"
+  OBJ="$(echo "$OBJ" | jq '.name = "qBittorrent" | .enable = true')"
+
+  log "создаю клиент загрузки qBittorrent, категория radarr"
+  arr_post "$RADARR" "$RADARR_API_KEY" v3 /downloadclient "$OBJ" >/dev/null \
+    || die "Radarr отказал при создании клиента загрузки"
 fi
 
 # ---------------------------------------------------------------------------
@@ -90,6 +107,11 @@ if ! grep -qE '^standardMovieFormat\s*=\s*\S' "$ROOT/docs/NAMING.md"; then
      Возьми рекомендованные строки из TRaSH Guides либо настрой схему
      в веб-морде и скопируй из GET /api/v3/config/naming."
 fi
-log "NAMING.md заполнен — применяю (реализовать чтение и PUT /config/naming)"
+
+# renameMovies по умолчанию false: без него схема не применяется вообще,
+# файлы останутся под релизными именами, и это не будет ошибкой.
+apply_naming Radarr "$RADARR" "$RADARR_API_KEY" v3 \
+  standardMovieFormat movieFolderFormat renameMovies \
+  replaceIllegalCharacters colonReplacementFormat
 
 log "готово"

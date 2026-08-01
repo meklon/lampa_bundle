@@ -105,16 +105,23 @@
 Ветка `stage/2-provision`. Начинается после снапшота ВМ.
 
 - [x] Строки переименования в `NAMING.md` заполнены из TRaSH Guides и утверждены. Заодно проверено на живых инстансах: `colonReplacementFormat` у Radarr строка `"smart"`, у Sonarr целое `4` — одно имя поля, разные типы; `renameMovies`/`renameEpisodes` по умолчанию `false`; `seasonFolderFormat` по умолчанию без ведущего нуля
-- [ ] `provision/10-qbittorrent.sh` — категории `radarr` → `/data/torrents/movies`, `sonarr` → `/data/torrents/tv`
-- [ ] `provision/20-prowlarr.sh` — Apps: Radarr и Sonarr с внутренними адресами и ключами, тест соединения проходит. **Индексаторы не добавляются**
-- [ ] `provision/30-radarr.sh` — root folders, download client, схема переименования из `NAMING.md`, **Use Hardlinks вкл.**, **все writer'ы метаданных выкл.**
-- [ ] `provision/40-sonarr.sh` — то же + `seasonFolder: true`
-- [ ] Connect → уведомления на Health Issue
-- [ ] **Идемпотентность:** повторный `provision/provision.sh` не создаёт дубликатов и не падает
-- [ ] Проверено вручную: writer'ы метаданных выключены в обоих
-- [ ] Проверено вручную: схема переименования совпадает с `NAMING.md`
-- [!] Б3: `checks/03-prowlarr-sync.sh` — до появления индексатора пропускается с явным сообщением
-- [ ] Отчёт `reports/stage-2-provision.md`
+- [x] `provision/10-qbittorrent.sh` — категории `radarr` → `/data/torrents/movies`, `sonarr` → `/data/torrents/tv`, проверено через `/api/v2/torrents/categories`
+- [x] `provision/20-prowlarr.sh` — Apps: Radarr и Sonarr зарегистрированы с внутренними адресами compose-сети, `applications/testall` вернул `isValid: true` для обоих. **Индексаторы не добавлялись**
+- [x] `provision/30-radarr.sh` — 2 root folder, клиент загрузки (категория `radarr`, `testall` валиден), схема имён из `NAMING.md`, `copyUsingHardlinks=true`, `enableMediaInfo=true`, writer'ов метаданных включено 0 из 5
+- [x] `provision/40-sonarr.sh` — то же, категория `sonarr`, writer'ов включено 0 из 5
+- [x] **Идемпотентность:** второй прогон `provision.sh` не создал ничего заново. Проверено состоянием, а не логом: 1 клиент загрузки и 2 root folder у каждого, 2 приложения у Prowlarr
+- [x] Схема переименования сверена пополе с `NAMING.md` — совпали все 11 задаваемых полей
+- [x] Индексаторов в Radarr и Sonarr — 0, вручную не создавались
+- [~] `checks/03-prowlarr-sync.sh` — **пропущена**, не пройдена. Регистрацию приложений подтвердила, синхронизацию проверить нечем: индексаторов нет (Б3)
+- [x] Отчёт `reports/stage-2-provision.md`
+- [ ] Connect → уведомления на Health Issue — не сделано, требует внешнего сервиса (Telegram или ntfy) и токена от человека
+
+`seasonFolder: true` в этот этап не входит: глобальной настройки у Sonarr нет,
+поле задаётся на каждом добавляемом сериале, то есть это работа bridge на
+этапе 5.
+
+`/health` у всех трёх приложений сообщает об отсутствии индексаторов. Это не
+поломка, а прямое следствие решения не подключать трекеры до последнего этапа.
 
 Конфигурация только идемпотентными скриптами через API. Не руками через
 веб-морду и не разовыми curl'ами: она живёт в SQLite внутри `config/`, в git не
