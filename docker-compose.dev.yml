@@ -1,0 +1,21 @@
+# Наложение для разработки: собирает образы из исходников вместо готовых.
+#
+# Основной docker-compose.yml раздаётся отдельно от репозитория и на сервере
+# лежит один. Ссылок на каталоги исходников в нём быть не должно — они бы
+# указывали в никуда.
+#
+# Использование:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+services:
+  init:
+    build:
+      context: .
+      dockerfile: provision/Dockerfile
+
+  provision:
+    build:
+      context: .
+      dockerfile: provision/Dockerfile
+
+  bridge:
+    build: ./bridge

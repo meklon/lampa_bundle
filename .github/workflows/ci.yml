@@ -1,0 +1,166 @@
+# CI: проверки на каждый push, публикация образов по тегу.
+#
+# НЕ ПРОВЕРЕН НА ЖИВОМ ЗАПУСКЕ. Написан по документации Actions, но ни разу не
+# выполнялся: у агента нет доступа к GitHub Actions. Первый прогон покажет
+# опечатки — это ожидаемо, а не признак поломки замысла.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  checks:
+    name: Тесты и линтеры
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Зависимости bridge
+        working-directory: bridge
+        run: pip install -e ".[dev]"
+
+      # Тесты сверяют имена полей со схемами в openapi/, поэтому каталог
+      # обязан быть в репозитории — иначе они молча пропустятся.
+      - name: Схемы на месте
+        run: |
+          test -n "$(ls openapi/*.json 2>/dev/null)" \
+            || { echo "нет схем в openapi/ — тесты станут бессмысленными"; exit 1; }
+
+      - name: pytest
+        working-directory: bridge
+        run: python -m pytest tests/ -q
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck checks/*.sh provision/*.sh scripts/*.sh fixtures/*.sh deploy.sh
+
+      - name: ruff
+        working-directory: bridge
+        run: |
+          python -m ruff check app tests
+          python -m ruff format --check app tests
+
+      # Плагин исполняется в браузере, где секрет утёк бы целиком. Проверяется
+      # тестом, но здесь ещё раз: цена ошибки высокая, стоимость проверки нулевая.
+      - name: В плагине нет секретов
+        run: |
+          ! grep -nE 'X-Api-Key|api_key|Bearer|:7878|:8989|:9696' bridge/static/plugin.js
+
+  build:
+    name: Сборка образов
+    runs-on: ubuntu-latest
+    needs: checks
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Публикуем только по тегу. На обычный push образы собираются, но никуда
+      # не уезжают: это проверка, что Dockerfile жив.
+      - name: Логин в реестр
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Версия из тега
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "value=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=dev-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: media-stack (provision и init)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: provision/Dockerfile
+          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/media-stack:${{ steps.version.outputs.value }}
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/media-stack:latest
+
+      - name: media-stack-bridge
+        uses: docker/build-push-action@v5
+        with:
+          context: ./bridge
+          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/media-stack-bridge:${{ steps.version.outputs.value }}
+            ${{ env.REGISTRY }}/${{ github.repository_owner }}/media-stack-bridge:latest
+
+  smoke:
+    name: Стек поднимается из двух файлов
+    runs-on: ubuntu-latest
+    needs: checks
+    steps:
+      - uses: actions/checkout@v4
+
+      # Смысл шага: доказать, что для запуска достаточно docker-compose.yml и
+      # .env. Репозиторий здесь есть только ради самих файлов; образы
+      # собираются локально и подставляются переменными.
+      - name: Собрать образы локально
+        run: |
+          docker build -f provision/Dockerfile -t local/media-stack:ci .
+          docker build -t local/media-stack-bridge:ci ./bridge
+
+      - name: Поднять из двух файлов
+        run: |
+          mkdir -p /tmp/dist && cp docker-compose.yml /tmp/dist/
+          cat > /tmp/dist/.env <<EOF
+          DATA_ROOT=/tmp/data
+          TORRENTS_PATH=torrents
+          MOVIES_PATH=media/movies
+          TV_PATH=media/tv
+          CONFIG_ROOT=./config
+          PUID=1000
+          PGID=1000
+          UMASK=002
+          TZ=UTC
+          RADARR_API_KEY=$(openssl rand -hex 16)
+          SONARR_API_KEY=$(openssl rand -hex 16)
+          PROWLARR_API_KEY=$(openssl rand -hex 16)
+          QBITTORRENT_USER=admin
+          QBITTORRENT_PASSWORD=$(openssl rand -hex 12)
+          BRIDGE_ENV=dev
+          RADARR_PROFILE=HD-1080p
+          RADARR_MIN_AVAILABILITY=released
+          SONARR_PROFILE=HD-1080p
+          TMDB_TOKEN=ci-not-a-real-token
+          CORS_ORIGINS=
+          TEST_TAG=test
+          STACK_IMAGE=local/media-stack
+          BRIDGE_IMAGE=local/media-stack-bridge
+          STACK_VERSION=ci
+          EOF
+          mkdir -p /tmp/data
+          cd /tmp/dist && docker compose up -d --wait --wait-timeout 300
+
+      - name: Провижининг отработал без ошибок
+        run: |
+          cd /tmp/dist
+          code=$(docker inspect provision --format '{{.State.ExitCode}}')
+          docker compose logs provision
+          test "$code" = "0" || { echo "провижининг вышел с кодом $code"; exit 1; }
+
+      - name: Разбор при неудаче
+        if: failure()
+        run: cd /tmp/dist && docker compose ps -a && docker compose logs

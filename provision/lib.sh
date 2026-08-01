@@ -139,10 +139,46 @@ set_field() {
 # ---------------------------------------------------------------------------
 # Схема имён
 # ---------------------------------------------------------------------------
-# naming_value <Radarr|Sonarr> <ключ> — достаёт строку из блока
-# «Строки конфигурации» в docs/NAMING.md. Единственный источник: держать копию
-# строк ещё и в скриптах значит завести второе место, которое разъедется.
+# Переменная окружения, которой можно переопределить каждое поле схемы.
+# Имена короткие и человеческие: NAMING.md остаётся источником умолчаний,
+# а переменные — способом их подменить, не пересобирая образ.
+#
+# Флагов renameMovies и replaceIllegalCharacters здесь намеренно нет:
+# отключение первого обесценивает всю схему (файлы останутся под релизными
+# именами), а второе ломает пути на файловых системах, не терпящих спецсимволы.
+naming_env_var() {
+  case "$1" in
+    standardMovieFormat)   echo RADARR_MOVIE_FORMAT ;;
+    movieFolderFormat)     echo RADARR_FOLDER_FORMAT ;;
+    standardEpisodeFormat) echo SONARR_EPISODE_FORMAT ;;
+    dailyEpisodeFormat)    echo SONARR_DAILY_FORMAT ;;
+    animeEpisodeFormat)    echo SONARR_ANIME_FORMAT ;;
+    seriesFolderFormat)    echo SONARR_SERIES_FOLDER_FORMAT ;;
+    seasonFolderFormat)    echo SONARR_SEASON_FOLDER_FORMAT ;;
+    *)                     echo "" ;;
+  esac
+}
+
+# naming_value <Radarr|Sonarr> <ключ>
+#
+# Сначала переменная окружения, потом умолчание из NAMING.md. Документ едет
+# внутрь образа провижининга, поэтому остаётся единственным местом, где
+# строки записаны: держать их копию ещё и в скриптах значит завести второе
+# место, которое разъедется.
+#
+# Умолчания НЕ кладутся в docker-compose.yml значениями ${VAR:-...}: строки
+# содержат фигурные скобки, а подстановка compose на них ломается.
 naming_value() {
+  local var
+  var="$(naming_env_var "$2")"
+  if [ -n "$var" ] && [ -n "${!var:-}" ]; then
+    printf '%s\n' "${!var}"
+    return 0
+  fi
+  naming_default "$@"
+}
+
+naming_default() {
   awk -v app="$1" -v key="$2" '
     /^## / { in_cfg = ($0 ~ /Строки конфигурации/); next }
     !in_cfg { next }

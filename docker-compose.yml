@@ -37,12 +37,12 @@ services:
   #
   # Ключи API сюда не попали: *arr берут их из переменных окружения.
   init:
-    image: python:3.12-alpine
+    image: ${STACK_IMAGE:-ghcr.io/meklon/media-stack}:${STACK_VERSION:-latest}
     container_name: init
     volumes:
       - ${DATA_ROOT}:/data
-      - ./config/qbittorrent:/qbt-config
-      - ./scripts:/scripts:ro
+      - ${CONFIG_ROOT:-./config}/qbittorrent:/qbt-config
+      - ${CONFIG_ROOT:-./config}/lampac:/lampac-config
     environment:
       - PUID=${PUID}
       - PGID=${PGID}
@@ -51,7 +51,7 @@ services:
       - TV_PATH=${TV_PATH}
       - QBITTORRENT_USER=${QBITTORRENT_USER}
       - QBITTORRENT_PASSWORD=${QBITTORRENT_PASSWORD}
-    command: ["python", "/scripts/init.py"]
+    command: ["python3", "/app/scripts/init.py"]
     restart: "no"
     logging: *logging
 
@@ -69,7 +69,7 @@ services:
       init:
         condition: service_completed_successfully
     volumes:
-      - ./config/qbittorrent:/config
+      - ${CONFIG_ROOT:-./config}/qbittorrent:/config
       - ${DATA_ROOT}:/data
     ports:
       - "8081:8081"
@@ -99,7 +99,7 @@ services:
       # первого старта. Проверено: принимается и сохраняется.
       - PROWLARR__AUTH__APIKEY=${PROWLARR_API_KEY}
     volumes:
-      - ./config/prowlarr:/config
+      - ${CONFIG_ROOT:-./config}/prowlarr:/config
     ports:
       - "9696:9696"
     healthcheck:
@@ -123,7 +123,7 @@ services:
       # первого старта. Проверено: принимается и сохраняется.
       - RADARR__AUTH__APIKEY=${RADARR_API_KEY}
     volumes:
-      - ./config/radarr:/config
+      - ${CONFIG_ROOT:-./config}/radarr:/config
       - ${DATA_ROOT}:/data
     ports:
       - "7878:7878"
@@ -151,7 +151,7 @@ services:
       # первого старта. Проверено: принимается и сохраняется.
       - SONARR__AUTH__APIKEY=${SONARR_API_KEY}
     volumes:
-      - ./config/sonarr:/config
+      - ${CONFIG_ROOT:-./config}/sonarr:/config
       - ${DATA_ROOT}:/data
     ports:
       - "8989:8989"
@@ -167,7 +167,10 @@ services:
     restart: unless-stopped
 
   bridge:
-    build: ./bridge
+    # Только опубликованный образ. Сборка из исходников вынесена в
+    # docker-compose.dev.yml: этот файл раздаётся отдельно от репозитория, и
+    # ссылка на ./bridge на сервере указывала бы в никуда.
+    image: ${BRIDGE_IMAGE:-ghcr.io/meklon/media-stack-bridge}:${STACK_VERSION:-latest}
     container_name: bridge
     environment:
       - BRIDGE_ENV=${BRIDGE_ENV}
@@ -233,11 +236,14 @@ services:
   # настройка, а не состояние сервиса.
   lampac:
     image: ghcr.io/lampac-nextgen/lampac:${LAMPAC_TAG:-1.4.3}
+    depends_on:
+      init:
+        condition: service_completed_successfully
     container_name: lampac
     environment:
       - TZ=${TZ}
     volumes:
-      - ./lampac/init.conf:/lampac/init.conf
+      - ${CONFIG_ROOT:-./config}/lampac/init.conf:/lampac/init.conf
     ports:
       - "9118:9118"
     # Задано вслед за официальным compose проекта: парсерам нужна разделяемая
@@ -265,7 +271,7 @@ services:
   # restart: no — сервис одноразовый: отработал и вышел. Ненулевой код виден
   # в `compose ps` и в логах, то есть сломанная настройка не проходит молча.
   provision:
-    image: alpine:3
+    image: ${STACK_IMAGE:-ghcr.io/meklon/media-stack}:${STACK_VERSION:-latest}
     container_name: provision
     depends_on:
       qbittorrent:
@@ -276,10 +282,6 @@ services:
         condition: service_healthy
       sonarr:
         condition: service_healthy
-    volumes:
-      # Только чтение: провижининг ничего в репозитории не меняет.
-      - .:/repo:ro
-    working_dir: /repo
     environment:
       # Внутри compose-сети адреса другие: localhost указывал бы на сам
       # контейнер провижининга.
@@ -287,8 +289,21 @@ services:
       - SONARR_BASE=http://sonarr:8989
       - PROWLARR_BASE=http://prowlarr:9696
       - QBT_BASE=http://qbittorrent:8081
-    command: >
-      sh -c "apk add --no-cache bash curl jq >/dev/null 2>&1 &&
-             bash ./provision/provision.sh"
+      - RADARR_API_KEY=${RADARR_API_KEY}
+      - SONARR_API_KEY=${SONARR_API_KEY}
+      - PROWLARR_API_KEY=${PROWLARR_API_KEY}
+      - QBITTORRENT_USER=${QBITTORRENT_USER:-admin}
+      - QBITTORRENT_PASSWORD=${QBITTORRENT_PASSWORD}
+      - TORRENTS_PATH=${TORRENTS_PATH}
+      - MOVIES_PATH=${MOVIES_PATH}
+      - TV_PATH=${TV_PATH}
+      # Схема имён. Пусто — берутся проверенные умолчания из образа.
+      - RADARR_MOVIE_FORMAT=${RADARR_MOVIE_FORMAT:-}
+      - RADARR_FOLDER_FORMAT=${RADARR_FOLDER_FORMAT:-}
+      - SONARR_EPISODE_FORMAT=${SONARR_EPISODE_FORMAT:-}
+      - SONARR_DAILY_FORMAT=${SONARR_DAILY_FORMAT:-}
+      - SONARR_ANIME_FORMAT=${SONARR_ANIME_FORMAT:-}
+      - SONARR_SERIES_FOLDER_FORMAT=${SONARR_SERIES_FOLDER_FORMAT:-}
+      - SONARR_SEASON_FOLDER_FORMAT=${SONARR_SEASON_FOLDER_FORMAT:-}
     restart: "no"
     logging: *logging
