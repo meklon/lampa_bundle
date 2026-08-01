@@ -1,0 +1,66 @@
+# Материал для тестового стенда.
+#
+# Требования к материалу (см. SPEC.md, раздел 5):
+#   - СУЩЕСТВУЕТ В TMDB, иначе Radarr не сопоставит
+#   - открытая лицензия
+#   - настоящий видеофайл: есть длительность, кодек, разрешение, поэтому
+#     MediaInfo и определение качества у *arr работают честно.
+#     Файл-пустышка может быть отброшен как sample.
+#
+# tmdb_id НЕ прописан намеренно: make-fixture.sh разрешает его через
+# TMDB API по названию и году. Хардкодить идентификатор, взятый по памяти,
+# — прямой путь к тому, что тест проверяет не тот фильм.
+#
+# url нужно заполнить и ПРОВЕРИТЬ перед первым запуском: ссылки на зеркала
+# открытых лент меняются. Прямая ссылка на файл, не на страницу.
+
+movies:
+  - title: Big Buck Bunny
+    year: 2008
+    licence: CC-BY
+    # Web seed из .torrent на webtorrent.io: файл доступен по обычному HTTPS.
+    # Сам .torrent оттуда НЕ используется — в нём udp- и wss-трекеры, из-за
+    # которых qBittorrent полез бы в сеть. Торрент собирается локально.
+    # Проверено 2026-08-01: 200, 276134947 байт, совпадает с length в .torrent.
+    # ffprobe: 1920x1080 h264, 634.6 с, аудио mp3 2.0 и ac3 5.1 —
+    # release_name ниже не врёт про 1080p и x264.
+    url: "https://webtorrent.io/torrents/Big%20Buck%20Bunny/Big%20Buck%20Bunny.mp4"
+    release_name: Big.Buck.Bunny.2008.1080p.WEB-DL.x264-TEST
+    category: radarr
+
+  - title: Sintel
+    year: 2010
+    licence: CC-BY
+    url: ""
+    release_name: Sintel.2010.1080p.WEB-DL.x264-TEST
+    category: radarr
+
+  - title: Tears of Steel
+    year: 2012
+    licence: CC-BY
+    url: ""
+    release_name: Tears.of.Steel.2012.1080p.WEB-DL.x264-TEST
+    category: radarr
+
+# Сериалов с открытой лицензией и записью в TVDB практически нет.
+# Практичный обход: взять tvdb_id реального сериала, а файлом положить ту же
+# короткометражку, переименованную в SxxEyy. Sonarr сопоставляет по имени,
+# не по содержимому, поэтому импорт проверяется честно.
+#
+# Держать ТОЛЬКО в выбрасываемом тестовом root folder (TEST_SONARR_ROOT),
+# чтобы потом не разбирать это в настоящей библиотеке.
+series:
+  # Разрешено через TMDB 2026-08-01, не вписано по памяти:
+  #   /search/tv?query=Breaking Bad&first_air_date_year=2008 -> ровно 1 кандидат
+  #   /tv/1396/external_ids -> tvdb_id=81189
+  # Статус Ended: сериал не идёт, поэтому краевой случай с дописыванием
+  # эпизодов в текущий сезон (открытый вопрос №2) сюда не примешивается.
+  - tmdb_id: 1396
+    title: Breaking Bad
+    year: 2008
+    tvdb_id: 81189     # справочно; скрипт всё равно перезапрашивает у TMDB
+    season: 1
+    episode: 1
+    source_file: Big Buck Bunny
+    release_name: Breaking.Bad.S01E01.1080p.WEB-DL.x264-TEST
+    category: sonarr

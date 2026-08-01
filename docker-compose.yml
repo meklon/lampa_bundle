@@ -1,0 +1,121 @@
+# Единственный compose-файл. Различия между ВМ и сервером живут в .env,
+# а не в отдельном dev-варианте: стенд должен повторять форму продакшена,
+# иначе баг с жёсткими ссылками не воспроизводится.
+#
+# КРИТИЧНО: у всех сервисов ОДНО монтирование ${DATA_ROOT}:/data.
+# Не разделять на /downloads и /movies — сломаются жёсткие ссылки.
+
+services:
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:${QBITTORRENT_TAG}
+    container_name: qbittorrent
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - UMASK=${UMASK}
+      - TZ=${TZ}
+      - WEBUI_PORT=8081
+      - TORRENTING_PORT=6881
+    volumes:
+      - ./config/qbittorrent:/config
+      - ${DATA_ROOT}:/data
+    ports:
+      - "8081:8081"
+      - "6881:6881"
+      - "6881:6881/udp"
+    restart: unless-stopped
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:${PROWLARR_TAG}
+    container_name: prowlarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - UMASK=${UMASK}
+      - TZ=${TZ}
+    volumes:
+      - ./config/prowlarr:/config
+    ports:
+      - "9696:9696"
+    restart: unless-stopped
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:${RADARR_TAG}
+    container_name: radarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - UMASK=${UMASK}
+      - TZ=${TZ}
+    volumes:
+      - ./config/radarr:/config
+      - ${DATA_ROOT}:/data
+    ports:
+      - "7878:7878"
+    depends_on:
+      - qbittorrent
+    restart: unless-stopped
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:${SONARR_TAG}
+    container_name: sonarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - UMASK=${UMASK}
+      - TZ=${TZ}
+    volumes:
+      - ./config/sonarr:/config
+      - ${DATA_ROOT}:/data
+    ports:
+      - "8989:8989"
+    depends_on:
+      - qbittorrent
+    restart: unless-stopped
+
+  bridge:
+    build: ./bridge
+    container_name: bridge
+    environment:
+      - BRIDGE_ENV=${BRIDGE_ENV}
+      - RADARR_URL=http://radarr:7878
+      - RADARR_API_KEY=${RADARR_API_KEY}
+      - RADARR_ROOT=${RADARR_ROOT}
+      - RADARR_PROFILE=${RADARR_PROFILE}
+      - RADARR_MIN_AVAILABILITY=${RADARR_MIN_AVAILABILITY}
+      - SONARR_URL=http://sonarr:8989
+      - SONARR_API_KEY=${SONARR_API_KEY}
+      - SONARR_ROOT=${SONARR_ROOT}
+      - SONARR_PROFILE=${SONARR_PROFILE}
+      - TMDB_TOKEN=${TMDB_TOKEN}
+      # В dev-режиме заказы идут в тестовые root folder и метятся тегом:
+      # отладочный цикл не должен засорять настоящую библиотеку.
+      - TEST_TAG=${TEST_TAG}
+      - TEST_RADARR_ROOT=${TEST_RADARR_ROOT}
+      - TEST_SONARR_ROOT=${TEST_SONARR_ROOT}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - radarr
+      - sonarr
+    restart: unless-stopped
+
+  # Раскомментировать, только если конкретный трекер требует обхода Cloudflare.
+  # Сам по себе хрупкий, добавляет точку отказа. На этапах 1-5 не нужен.
+  # flaresolverr:
+  #   image: ghcr.io/flaresolverr/flaresolverr:${FLARESOLVERR_TAG}
+  #   container_name: flaresolverr
+  #   environment:
+  #     - LOG_LEVEL=info
+  #     - TZ=${TZ}
+  #   ports:
+  #     - "8191:8191"
+  #   restart: unless-stopped
+
+  # Lampac. Опционально: можно держать вне этого стека.
+  # lampac:
+  #   image: immisterio/lampac:${LAMPAC_TAG}
+  #   container_name: lampac
+  #   ports:
+  #     - "9118:9118"
+  #   restart: unless-stopped

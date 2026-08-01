@@ -1,0 +1,14 @@
+[
+  {
+    "id": 1,
+    "path": "/data/media/tv",
+    "accessible": true,
+    "freeSpace": 10295029760
+  },
+  {
+    "id": 2,
+    "path": "/data/media/_test_tv",
+    "accessible": true,
+    "freeSpace": 10295029760
+  }
+]

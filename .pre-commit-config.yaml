@@ -1,0 +1,42 @@
+# Ревизии хуков нужно один раз актуализировать:
+#   pre-commit autoupdate
+# Установка:
+#   pip install pre-commit && pre-commit install
+
+repos:
+  # Сканер секретов. Главный хук в этом файле: ключи *arr агент видит
+  # постоянно, и рано или поздно один окажется в тестовой фикстуре.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=512"]
+      - id: check-merge-conflict
+      - id: check-yaml
+      # openapi/ исключён из обоих фиксеров намеренно. Это чужие файлы,
+      # скачанные по тегу из исходников *arr, и их sha256 записан в
+      # openapi/SOURCES.md. Дописанный перевод строки меняет сумму — запись о
+      # происхождении становится ложной, а расхождение молчаливое: файл
+      # выглядит тем же самым. Вендоренное хранится побайтно как у источника.
+      - id: end-of-file-fixer
+        exclude: ^openapi/.*\.json$
+      - id: trailing-whitespace
+        exclude: ^openapi/.*\.json$
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.10.0
+    hooks:
+      - id: shellcheck

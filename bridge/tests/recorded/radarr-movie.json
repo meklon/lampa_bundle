@@ -1,0 +1,13 @@
+[
+  {
+    "id": 1,
+    "title": "Big Buck Bunny",
+    "year": 2008,
+    "tmdbId": 10378,
+    "hasFile": true,
+    "monitored": true,
+    "rootFolderPath": "/data/media/_test_movies/Big Buck Bunny (2008)",
+    "qualityProfileId": 4,
+    "minimumAvailability": "released"
+  }
+]
