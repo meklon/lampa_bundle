@@ -51,8 +51,15 @@ Q="$(arr_get "$RADARR" "${RADARR_API_KEY:-}" v3 /queue | jq '.totalRecords // (.
 assert_eq "очередь Radarr пуста" 0 "${Q:-0}"
 
 MID="$(echo "$MOVIE" | jq -r .id)"
-H="$(arr_get "$RADARR" "${RADARR_API_KEY:-}" v3 "/history/movie?movieId=$MID" | jq 'length' 2>/dev/null)"
-assert_eq "история по фильму пуста" 0 "${H:-0}"
+HIST="$(arr_get "$RADARR" "${RADARR_API_KEY:-}" v3 "/history/movie?movieId=$MID")"
+# Утверждается ОТСУТСТВИЕ ЗАХВАТА РЕЛИЗА, а не пустая история. Пустота была
+# прокси: она ломалась, как только фильм законно импортировался со стенда
+# (событие downloadFolderImported), и проверка падала на исправном стеке.
+# Событие "grabbed" — единственное, которое означает «поиск привёл к
+# загрузке», а именно этого в dev-режиме быть не должно.
+GRABBED="$(echo "$HIST" | jq '[.[] | select(.eventType=="grabbed")] | length' 2>/dev/null)"
+assert_eq "релизов захвачено" 0 "${GRABBED:-0}"
+echo "$HIST" | jq -r '.[] | "         история: \(.eventType) \(.date)"' 2>/dev/null
 
 title "Идемпотентность: повторный заказ"
 RESP2="$(curl -fsS -X POST "$BRIDGE/order" \
