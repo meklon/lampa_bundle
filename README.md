@@ -30,8 +30,8 @@
 
 ```bash
 mkdir -p /opt/media-stack && cd /opt/media-stack
-curl -O https://raw.githubusercontent.com/meklon/lampa_bundle/v1.0.0/docker-compose.yml
-curl -o .env https://raw.githubusercontent.com/meklon/lampa_bundle/v1.0.0/.env.example
+curl -O https://raw.githubusercontent.com/meklon/lampa_bundle/v1.0.1/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/meklon/lampa_bundle/v1.0.1/.env.example
 # заполнить .env
 docker compose up -d
 ```
@@ -79,10 +79,14 @@ TMDB_TOKEN                         # Bearer v4, не v3 api_key
 | `RADARR_TAG`, `SONARR_TAG`, `PROWLARR_TAG`, `QBITTORRENT_TAG`, `LAMPAC_TAG` | проверенные версии в compose |
 | `RADARR_MOVIE_FORMAT`, `SONARR_EPISODE_FORMAT` и остальные пять | строки TRaSH Guides из образа |
 | `CORS_ORIGINS` | пусто = «тот же хост, любой порт» |
-| `STACK_VERSION`, `STACK_IMAGE`, `BRIDGE_IMAGE` | опубликованные образы |
+| `STACK_IMAGE`, `BRIDGE_IMAGE` | опубликованные образы |
 
-Смена версий образов — правка `docker-compose.yml`, а не `.env`: миграции БД
-у *arr односторонние, и такое решение должно проходить через git и снапшот.
+`STACK_VERSION` в `.env.example` задан явно и указывает на текущий выпуск.
+Без него взялся бы `latest`, и две установки, сделанные в разные дни, были бы
+разными.
+
+Смена версий *arr — правка `docker-compose.yml`, а не `.env`: миграции БД
+у них односторонние, и такое решение должно проходить через git и снапшот.
 
 Схему имён менять **до** наполнения библиотеки, иначе переименовывать всё
 разом.
