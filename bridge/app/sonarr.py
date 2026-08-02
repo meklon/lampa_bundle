@@ -2,7 +2,7 @@
 
 ИМЕНА ПОЛЕЙ БЕРУТСЯ ИЗ openapi/sonarr-v3-*.json, НЕ ИЗ ПАМЯТИ.
 
-Два инварианта этого модуля:
+Три инварианта этого модуля:
   1. Добавление только по tvdbId. Добавление по tmdbId Sonarr не поддерживает.
      Поиск по названию через series/lookup?term= ЗАПРЕЩЁН: нечёткое
      совпадение притащит не тот сериал. Дополнительно, series/lookup
@@ -10,6 +10,13 @@
   2. monitorNewItems="none" на каждом добавляемом сериале. Без этого заказ
      одного сезона превращается в подписку на сериал. Глобальной настройки
      для поля не существует, задаётся только на сериал.
+  3. Мониторинг ставится и на сезон, и на ЭПИЗОДЫ. Загрузку Sonarr планирует
+     по эпизодам, поэтому одного флага сезона недостаточно: заказ пройдёт,
+     поиск отработает, и не скачается ничего. См. set_episodes_monitored.
+
+Заказ сезона — это три записи, а не одна: добавление сериала, seasonpass,
+мониторинг эпизодов. Каждая из трёх отвечает успехом раньше, чем применяет
+изменение, поэтому у каждой есть чтение результата обратно.
 """
 
 import asyncio
@@ -166,7 +173,11 @@ class Sonarr:
         4.0.19.2979: `addOptions.monitor` затирает флаги после добавления,
         причём ответ POST этого не показывает — возвращает `monitored: true`,
         тогда как в базе лежит `false`. Мониторинг нужного сезона включается
-        вторым шагом. Подробности с таблицами — `docs/SPEC.md` 2.5.
+        вторым шагом, эпизодов этого сезона — третьим. Подробности с
+        таблицами — `docs/SPEC.md` 2.5.
+
+        Побочное следствие `addOptions.monitor="none"`: эпизоды создаются с
+        `monitored=false`, все до одного. Это и лечит третий шаг.
         """
         payload: dict = {
             "tvdbId": tvdb_id,
@@ -301,6 +312,11 @@ class Sonarr:
         # где POST /series возвращал monitored=true при false в базе.
         await self._verify_season_monitored(series_id, season)
 
+        # Флага сезона НЕДОСТАТОЧНО. Скачивание Sonarr планирует по эпизодам,
+        # и без этого шага заказ выглядит выполненным, но не приводит ни к
+        # одной загрузке. См. set_episodes_monitored.
+        await self.set_episodes_monitored(series_id, season)
+
     async def _verify_season_monitored(self, series_id: int, season: int) -> None:
         r = await self._request("GET", f"/series/{series_id}")
         if r.status_code >= 400:
@@ -311,6 +327,123 @@ class Sonarr:
                 f"Sonarr не применил мониторинг сезона {season}: "
                 f"сейчас отслеживаются {monitored or 'ни одного'}. Попробуй ещё раз"
             )
+
+    # -- мониторинг эпизодов --------------------------------------------------
+
+    async def episodes(self, series_id: int) -> list[dict]:
+        """GET /api/v3/episode?seriesId=… — все эпизоды сериала.
+
+        Параметр `seriesId` и поля `id`, `seasonNumber`, `monitored` сверены со
+        схемой `EpisodeResource` в openapi/sonarr-v3-v4.0.19.2979.json.
+        """
+        r = await self._request("GET", f"/episode?seriesId={series_id}")
+        if r.status_code >= 400:
+            raise UpstreamUnavailable(f"Sonarr /episode вернул {r.status_code}")
+        return list(r.json() or [])
+
+    def _build_episode_monitor_payload(self, episode_ids: list[int], monitored: bool) -> dict:
+        """Тело запроса PUT /api/v3/episode/monitor.
+
+        Схема `EpisodesMonitoredResource`: ровно два поля, `episodeIds`
+        (массив int32) и `monitored` (bool). Форма проверяется автоматически в
+        tests/test_payloads.py против той же схемы.
+        """
+        return {"episodeIds": [int(i) for i in episode_ids], "monitored": monitored}
+
+    @staticmethod
+    def _split_episodes(episodes: list[dict], season: int) -> tuple[list[int], list[int]]:
+        """Идентификаторы эпизодов: заказанного сезона и всех остальных.
+
+        Сезон 0 (спецвыпуски) — «остальные», как и любой другой: заказан был
+        не он. Выделено в отдельную функцию, чтобы разбиение проверялось
+        тестом без обращения к сети.
+        """
+        target = [int(e["id"]) for e in episodes if e.get("seasonNumber") == season]
+        others = [int(e["id"]) for e in episodes if e.get("seasonNumber") != season]
+        return target, others
+
+    async def _put_episode_monitor(self, episode_ids: list[int], monitored: bool) -> None:
+        if not episode_ids:
+            return
+        payload = self._build_episode_monitor_payload(episode_ids, monitored)
+        r = await self._request("PUT", "/episode/monitor", json=payload)
+        if r.status_code >= 400:
+            raise UpstreamUnavailable(
+                f"Sonarr отказал при настройке эпизодов: {r.status_code} {r.text[:300]}"
+            )
+
+    async def set_episodes_monitored(self, series_id: int, season: int) -> None:
+        """Мониторинг эпизодов: у заказанного сезона включён, у прочих выключен.
+
+        ЗАЧЕМ ЭТОТ ШАГ ВООБЩЕ НУЖЕН. Sonarr планирует загрузку по ЭПИЗОДАМ, а
+        не по сезонам: флаг сезона — это фильтр в интерфейсе и правило для
+        новых серий, но поиск забирает релиз только под отслеживаемый эпизод.
+
+        Два сознательных решения этого модуля вместе выключают все эпизоды:
+
+          - `addOptions.monitor="none"` при добавлении (иначе заказ сезона
+            превращается в подписку на сериал) — сериал создаётся, все
+            эпизоды приходят с `monitored=false`;
+          - `monitoringOptions` не передаётся в seasonpass (иначе пресет
+            затирает массив `seasons`) — а именно он протаскивал бы
+            мониторинг вниз, на эпизоды.
+
+        Оба решения остаются в силе, и оба правильны. Недостающее звено
+        добавляется здесь, третьим запросом.
+
+        Наблюдалось на живом стенде, Sonarr 4.0.19.2979, «The Boys» S05:
+        сезон monitored=true, эпизоды E1..E8 monitored=false, поиск находит
+        17 релизов и не забирает ни одного. Ни ошибки, ни записи в истории.
+        Отчёт: reports/stage-8-monitoring-and-paths.md.
+
+        Эпизоды прочих сезонов гасятся ЯВНО. Без этого при заказе второго
+        сезона того же сериала эпизоды первого остались бы отслеживаемыми, и
+        инвариант «ровно один сезон» соблюдался бы на бумаге, но не на деле.
+
+        Порядок «сначала выключить, потом включить» выбран не случайно: если
+        второй запрос не пройдёт, отслеживаемых эпизодов не останется вовсе —
+        заказ не выполнится, но и лишнего не скачается.
+        """
+        episodes = await self.episodes(series_id)
+        target, others = self._split_episodes(episodes, season)
+        if not target:
+            raise UpstreamUnavailable(
+                f"Sonarr не знает ни одного эпизода сезона {season} — попробуй ещё раз"
+            )
+
+        await self._put_episode_monitor(others, False)
+        await self._put_episode_monitor(target, True)
+
+        await self._verify_episodes_monitored(series_id, season, expected=len(target))
+
+    async def _verify_episodes_monitored(
+        self, series_id: int, season: int, expected: int, timeout: float = 20.0
+    ) -> None:
+        """Читает результат обратно.
+
+        PUT /episode/monitor отвечает 202 Accepted — тот же класс, что и
+        seasonpass: «принято», а не «применено». Опрос, а не одна проверка,
+        потому что применение идёт фоном.
+        """
+        deadline = time.monotonic() + timeout
+        wrong = ""
+        while True:
+            episodes = await self.episodes(series_id)
+            on = [e for e in episodes if e.get("monitored")]
+            in_season = [e for e in on if e.get("seasonNumber") == season]
+            outside = [e for e in on if e.get("seasonNumber") != season]
+            if len(in_season) == expected and not outside:
+                return
+            wrong = (
+                f"отслеживается эпизодов: {len(in_season)} из {expected} в сезоне {season}"
+                f", лишних вне сезона: {len(outside)}"
+            )
+            if time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(1.0)
+        raise UpstreamUnavailable(
+            f"Sonarr не применил мониторинг эпизодов: {wrong}. Попробуй ещё раз"
+        )
 
     async def search_season(self, series_id: int, season: int) -> None:
         """POST /api/v3/command, {"name": "SeasonSearch", ...}.

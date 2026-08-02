@@ -108,8 +108,9 @@ qbt_post() {
 # стучался бы в самого себя.
 # Пути внутри контейнеров: единственное монтирование ${DATA_ROOT}:/data,
 # остальное задаётся относительными путями из .env.
-TORRENTS_MOVIES="/data/${TORRENTS_PATH}/movies"
-TORRENTS_TV="/data/${TORRENTS_PATH}/tv"
+TORRENTS_ROOT="/data/${TORRENTS_PATH}"
+TORRENTS_MOVIES="${TORRENTS_ROOT}/movies"
+TORRENTS_TV="${TORRENTS_ROOT}/tv"
 MEDIA_MOVIES="/data/${MOVIES_PATH}"
 MEDIA_TV="/data/${TV_PATH}"
 

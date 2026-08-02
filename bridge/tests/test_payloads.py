@@ -287,6 +287,65 @@ def test_seasonpass_rejects_unknown_season():
 
 
 # ---------------------------------------------------------------------------
+# Мониторинг эпизодов
+#
+# Флага сезона недостаточно: загрузку Sonarr планирует по эпизодам. Проверено
+# на живом стенде — сезон monitored=true, эпизоды false, поиск находит релизы
+# и не забирает ни одного. См. reports/stage-8-monitoring-and-paths.md.
+# ---------------------------------------------------------------------------
+
+
+def _episodes_stub() -> list[dict]:
+    """Три сезона плюс спецвыпуски, по два эпизода в каждом."""
+    return [
+        {"id": 100 + 10 * s + e, "seasonNumber": s, "episodeNumber": e, "monitored": False}
+        for s in (0, 1, 2, 3)
+        for e in (1, 2)
+    ]
+
+
+def test_episode_monitor_fields_exist_in_schema(sonarr_schema):
+    body = _sonarr()._build_episode_monitor_payload([1, 2, 3], monitored=True)
+    allowed = properties(sonarr_schema, "EpisodesMonitoredResource")
+    unknown = [k for k in body if k not in allowed]
+    assert not unknown, f"полей нет в EpisodesMonitoredResource: {unknown}"
+
+
+def test_episode_monitor_payload_carries_values():
+    body = _sonarr()._build_episode_monitor_payload([7, 8], monitored=False)
+    assert body == {"episodeIds": [7, 8], "monitored": False}
+
+
+def test_split_episodes_takes_whole_requested_season():
+    target, _ = _sonarr()._split_episodes(_episodes_stub(), season=2)
+    assert target == [121, 122]
+
+
+def test_split_episodes_puts_every_other_season_into_others():
+    """Прочие сезоны гасятся явно.
+
+    Иначе при заказе второго сезона того же сериала эпизоды первого остались
+    бы отслеживаемыми, и «ровно один сезон» соблюдался бы только на бумаге.
+    """
+    _, others = _sonarr()._split_episodes(_episodes_stub(), season=2)
+    assert others == [101, 102, 111, 112, 131, 132]
+
+
+def test_split_episodes_treats_specials_as_others():
+    """Сезон 0 — не заказанный сезон, значит выключается вместе с прочими."""
+    target, others = _sonarr()._split_episodes(_episodes_stub(), season=1)
+    assert 101 in others and 102 in others
+    assert target == [111, 112]
+
+
+def test_split_episodes_leaves_target_empty_for_unknown_season():
+    """Пустой target — сигнал вызывающему, а не повод молча ничего не сделать."""
+    target, others = _sonarr()._split_episodes(_episodes_stub(), season=99)
+    assert target == []
+    assert len(others) == 8
+
+
+# ---------------------------------------------------------------------------
 # Выбор профиля качества
 # ---------------------------------------------------------------------------
 
