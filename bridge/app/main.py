@@ -233,17 +233,30 @@ async def status(
     if type == "movie":
         radarr = Radarr(client)
         movie = await radarr.find_by_tmdb(tmdb_id)
-        queue = await radarr.queue()
-        commands = await radarr.commands()
-        result = movie_status(movie, queue, commands)
+        if movie is None:
+            # Самый частый случай — открытие карточки ещё не заказанного
+            # фильма при листании каталога. movie_status на None отвечает
+            # not_ordered, не заглядывая в очередь и команды — незачем
+            # делать эти запросы заранее.
+            result = movie_status(None, [], [])
+        else:
+            queue = await radarr.queue()
+            commands = await radarr.commands()
+            result = movie_status(movie, queue, commands)
     else:
         sonarr = Sonarr(client)
+        # Трансляция TMDB->TVDB должна остаться ДО поиска в Sonarr: NoTvdbId
+        # обязан всплыть как ошибка независимо от того, есть сериал в Sonarr
+        # или нет.
         tvdb_id = await Tmdb(client).tvdb_id(tmdb_id)
         series = await sonarr.find_by_tvdb(tvdb_id)
-        episodes = await sonarr.episodes(int(series["id"])) if series else []
-        queue = await sonarr.queue()
-        commands = await sonarr.commands()
-        result = series_status(series, episodes, queue, commands)
+        if series is None:
+            result = series_status(None, [], [], [])
+        else:
+            episodes = await sonarr.episodes(int(series["id"]))
+            queue = await sonarr.queue()
+            commands = await sonarr.commands()
+            result = series_status(series, episodes, queue, commands)
 
     return StatusResponse(
         state=result.state,
