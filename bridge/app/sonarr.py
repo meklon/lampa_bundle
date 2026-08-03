@@ -35,7 +35,7 @@ from .errors import (
     UpstreamUnavailable,
 )
 
-log = logging.getLogger(__name__)
+log = logging.getLogger("bridge")
 
 
 class Sonarr:
