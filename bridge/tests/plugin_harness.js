@@ -39,12 +39,37 @@ function makeNode(html) {
     html: html || '',
     children: [],
     handlers: {},
+    stored: {},
     length: 1,
     on(event, fn) {
       this.handlers[event] = fn;
       return this;
     },
+    // .data() — как в jQuery: без второго аргумента геттер, с ним сеттер.
+    // Плагин хранит здесь состояние заказа между 'complite' и hover:enter.
+    data(key, val) {
+      if (val === undefined) return this.stored[key];
+      this.stored[key] = val;
+      return this;
+    },
     find(selector) {
+      // 'span' — не дочерний узел, а текст внутри самой кнопки (как в
+      // разметке plugin.js). Отдельная ветка, а не элемент children, потому
+      // что реальная кнопка тоже создаётся одной строкой html, без DOM.
+      if (selector === 'span') {
+        const self = this;
+        return {
+          length: 1,
+          text(val) {
+            if (val === undefined) {
+              const m = self.html.match(/<span>([^<]*)<\/span>/);
+              return m ? m[1] : '';
+            }
+            self.html = self.html.replace(/<span>[^<]*<\/span>/, '<span>' + val + '</span>');
+            return this;
+          }
+        };
+      }
       const hits = this.children.filter((c) => c.html.indexOf(selector.replace('.', '')) !== -1);
       const res = hits.length ? hits[0] : makeNode('');
       res.length = hits.length;
@@ -97,6 +122,16 @@ function buildEnv(cardJson, method, opts) {
   global.$ = (html) => makeNode(html);
 
   global.fetch = (url, init) => {
+    // GET /status — состояние заказа. По умолчанию отдаём «не ответил»
+    // (ok: false): именно так ведёт себя bridge при отказе Radarr/Sonarr,
+    // и сценарии, которым состояние безразлично, не должны его выдумывать.
+    if (url.indexOf('/status') !== -1) {
+      calls.fetch.push({ url, body: null });
+      if (opts.status) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(opts.status) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    }
     // GET /profiles — список профилей качества. Отдаём тот же набор, что
     // стоит в Radarr и Sonarr по умолчанию, с отметкой умолчания.
     if (url.indexOf('/profiles') !== -1) {
@@ -273,4 +308,41 @@ if (failures) {
 console.log('ИТОГ: прошло');
 }
 
-main();
+// --------------------------------------------------------------------------
+// Отдельные сценарии для pytest: каждый проверяет одну вещь и печатает то,
+// что нужно найти в stdout, — без карточек check(), в отличие от main().
+// --------------------------------------------------------------------------
+
+// Карточка минимальна: для проверки состояния не нужны ни постеры, ни сезоны,
+// а tmdb_id взят так, чтобы не совпасть ни с одним фиктивным id из recorded/.
+const statusCard = { id: 1083381, title: 'Тест' };
+
+async function scenarioStatusRequest() {
+  const env = buildEnv(statusCard, 'movie');
+  env.fireFull(env.event);
+  await tick();
+  console.log(env.calls.fetch[0].url);
+}
+
+async function scenarioStatusLabel() {
+  const status = {
+    state: 'downloading',
+    label: 'Закачивается 44%',
+    detail: null,
+    can_order: false
+  };
+  const env = buildEnv(statusCard, 'movie', { status });
+  env.fireFull(env.event);
+  await tick();
+  const btn = env.root.children[env.root.children.length - 1];
+  console.log(btn.html);
+}
+
+const scenario = process.argv[2];
+if (scenario === 'status-request') {
+  scenarioStatusRequest();
+} else if (scenario === 'status-label') {
+  scenarioStatusLabel();
+} else {
+  main();
+}

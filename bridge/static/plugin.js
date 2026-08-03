@@ -75,6 +75,7 @@
 
   var ORDER_PATH = '/order';
   var PROFILES_PATH = '/profiles';
+  var STATUS_PATH = '/status';
 
   // -------------------------------------------------------------------------
   // Чтение карточки
@@ -124,6 +125,22 @@
     else console.log('[order]', message);
   }
 
+  /**
+   * Текущее состояние заказа. Логики здесь нет: bridge присылает готовый
+   * текст, плагин его показывает. Инвариант «плагин остаётся тонким».
+   */
+  function fetchStatus(card, callback) {
+    fetch(BRIDGE + STATUS_PATH + '?tmdb_id=' + encodeURIComponent(card.tmdb_id) +
+          '&type=' + encodeURIComponent(card.type))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (s) { callback(s && s.state ? s : null); })
+      .catch(function () {
+        // Не ответил — значит не знаем. Показываем карточку как раньше,
+        // выдуманных состояний быть не должно.
+        callback(null);
+      });
+  }
+
   function addButton(e, card) {
     var root = e.object.activity.render();
 
@@ -142,7 +159,7 @@
     );
 
     btn.on('hover:enter', function () {
-      handleOrder(card);
+      handleOrder(card, btn.data('status') || null);
     });
 
     // Рядом с кнопкой торрентов, если она есть, иначе в конец блока кнопок:
@@ -150,6 +167,13 @@
     var torrent = root.find('.view--torrent');
     if (torrent.length) torrent.after(btn);
     else root.find('.full-start-new__buttons').append(btn);
+
+    // Состояние подгружается отдельно: карточка не должна ждать сеть.
+    fetchStatus(card, function (status) {
+      if (!status) return;
+      btn.data('status', status);
+      btn.find('span').text(status.label);
+    });
   }
 
   function pickQuality(card, callback) {
@@ -200,7 +224,7 @@
       });
   }
 
-  function pickSeason(card, callback) {
+  function pickSeason(card, status, callback) {
     if (!card.seasons.length) {
       // Сезонов в данных нет — не выдумываем номер, говорим прямо.
       notify('У сериала не видно сезонов, заказывать нечего');
@@ -210,8 +234,18 @@
     // Куда вернуть управление после закрытия списка.
     var back = Lampa.Controller.enabled().name;
 
+    // Состояние по сезонам приходит от bridge готовым текстом — плагин
+    // только сопоставляет его с номером сезона, не разбирая смысл.
+    var byNumber = {};
+    if (status && status.seasons) {
+      for (var j = 0; j < status.seasons.length; j++) {
+        byNumber[status.seasons[j].season] = status.seasons[j].label;
+      }
+    }
     var items = card.seasons.map(function (n) {
-      return { title: n === 0 ? 'Спецвыпуски' : 'Сезон ' + n, season: n };
+      var title = n === 0 ? 'Спецвыпуски' : 'Сезон ' + n;
+      if (byNumber[n]) title += ' — ' + byNumber[n];
+      return { title: title, season: n };
     });
 
     Lampa.Select.show({
@@ -256,7 +290,45 @@
       });
   }
 
-  function handleOrder(card) {
+  function showStatus(card, status) {
+    var back = Lampa.Controller.enabled().name;
+    var items = [{ title: status.label, action: 'none' }];
+    if (status.detail) items.push({ title: status.detail, action: 'none' });
+    items.push({ title: 'Обновить', action: 'refresh' });
+
+    Lampa.Select.show({
+      title: card.title,
+      items: items,
+      onSelect: function (item) {
+        Lampa.Controller.toggle(back);
+        if (item.action === 'refresh') refresh(card);
+      },
+      onBack: function () { Lampa.Controller.toggle(back); }
+    });
+  }
+
+  // Обновление перечитывает состояние и переписывает текст кнопки. Кнопку
+  // надо найти в текущей активности — ссылки на неё из showStatus нет.
+  function refresh(card) {
+    var btn = $('.view--order');
+    fetchStatus(card, function (status) {
+      if (!status) {
+        notify('Состояние получить не удалось');
+        return;
+      }
+      btn.data('status', status);
+      btn.find('span').text(status.label);
+      notify(status.label);
+    });
+  }
+
+  function handleOrder(card, status) {
+    // Заказ уже в работе — показываем что происходит, а не заказываем снова.
+    if (status && status.can_order === false) {
+      showStatus(card, status);
+      return;
+    }
+
     function fire(season, profile) {
       notify('Отправляю: ' + card.title);
       var body = { tmdb_id: card.tmdb_id, type: card.type, season: season };
@@ -272,7 +344,7 @@
 
     // Порядок вопросов: сначала «что» (сезон), потом «как» (качество).
     if (card.type === 'tv') {
-      pickSeason(card, function (season) {
+      pickSeason(card, status, function (season) {
         pickQuality(card, function (profile) {
           fire(season, profile);
         });

@@ -52,3 +52,30 @@ def test_plugin_reacts_only_to_complite():
     text = PLUGIN.read_text(encoding="utf-8")
     assert "'complite'" in text
     assert "e.type !== 'complite'" in text
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="нужен node")
+def test_plugin_requests_status_for_card():
+    """Плагин обязан спросить состояние по tmdb_id и типу карточки."""
+    r = subprocess.run(
+        ["node", str(HARNESS), "status-request"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "/status?tmdb_id=1083381&type=movie" in r.stdout
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="нужен node")
+def test_plugin_shows_label_instead_of_order():
+    """can_order=false → на кнопке состояние, а не «Заказать»."""
+    r = subprocess.run(
+        ["node", str(HARNESS), "status-label"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "Закачивается 44%" in r.stdout
+    assert "Заказать" not in r.stdout
