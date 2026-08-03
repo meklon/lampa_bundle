@@ -419,3 +419,52 @@ def test_specials_season_zero_is_included():
     )
     s = series_status(series, _episodes(season=0, count=4, monitored=False), [], [])
     assert s.seasons[0].season == 0
+
+
+def test_season_import_blocked_shows_as_stuck():
+    """importBlocked — импорт заблокирован, состояние stuck.
+    Проверяется отдельно от других import-состояний."""
+    s = series_status(_series(), _episodes(), [_tv_queue(trackedDownloadState="importBlocked")], [])
+    assert s.seasons[0].state == "stuck"
+    assert "заблокирован" in s.seasons[0].label.lower()
+
+
+def test_season_import_pending_shows_as_importing():
+    """importPending — импорт в очереди, состояние importing."""
+    s = series_status(_series(), _episodes(), [_tv_queue(trackedDownloadState="importPending")], [])
+    assert s.seasons[0].state == "importing"
+    assert s.seasons[0].label == "импортируется"
+
+
+def test_season_importing_shows_as_importing():
+    """importing — файл в процессе импорта, состояние importing."""
+    s = series_status(_series(), _episodes(), [_tv_queue(trackedDownloadState="importing")], [])
+    assert s.seasons[0].state == "importing"
+
+
+def test_season_imported_shows_as_downloading():
+    """imported — файл завершил импорт, но не переместился в место назначения.
+    На промежуточном этапе показываем как downloading, пока не обновится статус."""
+    s = series_status(_series(), _episodes(), [_tv_queue(trackedDownloadState="imported")], [])
+    # imported не совпадает с _IMPORT_ACTIVE и _IMPORT_BLOCKED, поэтому проваливается в downloading
+    assert s.seasons[0].state == "downloading"
+
+
+def test_season_search_queued_counts_as_searching():
+    """Команда SeasonSearch в статусе queued считается активной поиском, как и started."""
+    cmd = {"name": "SeasonSearch", "status": "queued", "body": {"seriesId": 1, "seasonNumber": 2}}
+    s = series_status(_series(), _episodes(), [], [cmd])
+    assert s.seasons[0].state == "searching"
+
+
+def test_partial_episode_monitoring_does_not_trigger_monitoring_broken():
+    """Когда часть эпизодов отслеживается, а часть нет, это не считается сломанным мониторингом.
+    Сломанный мониторинг срабатывает только когда НИ ОДИН эпизод не отслеживается."""
+    eps = _episodes(count=10)
+    # Часть эпизодов не отслеживается
+    for i in range(5, 10):
+        eps[i]["monitored"] = False
+    s = series_status(_series(), eps, [], [])
+    assert s.seasons[0].state != "monitoring_broken"
+    # При наличии файлов должно быть partial, при отсутствии файлов - waiting
+    assert s.seasons[0].state == "waiting"

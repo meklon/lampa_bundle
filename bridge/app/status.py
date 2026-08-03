@@ -244,7 +244,7 @@ def _season_status(
         return done("not_ordered", "не заказан")
 
     searching = any(
-        c.get("status") == "started"
+        c.get("status") in ("started", "queued")
         and c.get("name") == "SeasonSearch"
         and (c.get("body") or {}).get("seriesId") == series_id
         and (c.get("body") or {}).get("seasonNumber") == number
@@ -268,7 +268,10 @@ def _season_status(
         if _is_stuck(record):
             return done("stuck", f"загрузка застряла: {_stuck_detail(record)}")
     for record in mine_q:
-        if str(record.get("trackedDownloadState", "")).startswith("import"):
+        download_state = str(record.get("trackedDownloadState", ""))
+        if download_state in _IMPORT_BLOCKED:
+            return done("stuck", "импорт заблокирован — файл не может быть импортирован")
+        if download_state in _IMPORT_ACTIVE:
             return done("importing", "импортируется")
     if mine_q:
         size = sum(r.get("size") or 0 for r in mine_q)
