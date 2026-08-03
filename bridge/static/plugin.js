@@ -159,7 +159,7 @@
     );
 
     btn.on('hover:enter', function () {
-      handleOrder(card, btn.data('status') || null);
+      handleOrder(card, btn.data('status') || null, btn);
     });
 
     // Рядом с кнопкой торрентов, если она есть, иначе в конец блока кнопок:
@@ -290,7 +290,7 @@
       });
   }
 
-  function showStatus(card, status) {
+  function showStatus(card, status, btn) {
     var back = Lampa.Controller.enabled().name;
     var items = [{ title: status.label, action: 'none' }];
     if (status.detail) items.push({ title: status.detail, action: 'none' });
@@ -301,16 +301,19 @@
       items: items,
       onSelect: function (item) {
         Lampa.Controller.toggle(back);
-        if (item.action === 'refresh') refresh(card);
+        if (item.action === 'refresh') refresh(card, btn);
       },
       onBack: function () { Lampa.Controller.toggle(back); }
     });
   }
 
-  // Обновление перечитывает состояние и переписывает текст кнопки. Кнопку
-  // надо найти в текущей активности — ссылки на неё из showStatus нет.
-  function refresh(card) {
-    var btn = $('.view--order');
+  // Обновление перечитывает состояние и переписывает текст кнопки. Элемент
+  // кнопки приходит явно, от addButton через handleOrder и showStatus —
+  // поиск по глобальному селектору (`$('.view--order')`) в SPA небезопасен:
+  // Lampa держит в DOM карточки, с которых уже ушли, и сеттер jQuery
+  // применился бы ко всем найденным элементам разом, переписав состояние
+  // на чужой невидимой кнопке.
+  function refresh(card, btn) {
     fetchStatus(card, function (status) {
       if (!status) {
         notify('Состояние получить не удалось');
@@ -322,10 +325,10 @@
     });
   }
 
-  function handleOrder(card, status) {
+  function handleOrder(card, status, btn) {
     // Заказ уже в работе — показываем что происходит, а не заказываем снова.
     if (status && status.can_order === false) {
-      showStatus(card, status);
+      showStatus(card, status, btn);
       return;
     }
 

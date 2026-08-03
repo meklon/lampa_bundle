@@ -79,3 +79,18 @@ def test_plugin_shows_label_instead_of_order():
     assert r.returncode == 0, r.stderr
     assert "Закачивается 44%" in r.stdout
     assert "Заказать" not in r.stdout
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="нужен node")
+def test_plugin_reopen_card_keeps_single_button_and_status_request():
+    """'complite' приходит и при возврате в карточку — кнопка и запрос
+    состояния не должны задвоиться (см. ранний return в addButton)."""
+    r = subprocess.run(
+        ["node", str(HARNESS), "reopen-card"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "buttons=1" in r.stdout
+    assert "status-requests=1" in r.stdout

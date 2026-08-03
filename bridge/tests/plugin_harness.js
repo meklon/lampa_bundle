@@ -338,11 +338,29 @@ async function scenarioStatusLabel() {
   console.log(btn.html);
 }
 
+// 'complite' приходит и при возврате в карточку (см. addButton), не только
+// при первом открытии. Ранний return по найденной кнопке обязан гасить не
+// только повторную кнопку, но и повторный запрос /status — иначе при
+// каждом возврате в карточку копился бы ещё один fetch.
+async function scenarioReopenCard() {
+  const env = buildEnv(statusCard, 'movie');
+  env.fireFull(env.event);
+  await tick();
+  env.fireFull(env.event);
+  await tick();
+  const buttons = env.root.find('.view--order').length;
+  const statusRequests = env.calls.fetch.filter((c) => c.url.indexOf('/status') !== -1).length;
+  console.log('buttons=' + buttons);
+  console.log('status-requests=' + statusRequests);
+}
+
 const scenario = process.argv[2];
 if (scenario === 'status-request') {
   scenarioStatusRequest();
 } else if (scenario === 'status-label') {
   scenarioStatusLabel();
+} else if (scenario === 'reopen-card') {
+  scenarioReopenCard();
 } else {
   main();
 }
