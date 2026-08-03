@@ -5,7 +5,58 @@
 openapi-схем Radarr и Sonarr, конкретные значения подставлены в фикстурах теста.
 """
 
-from app.status import ItemStatus, movie_status, series_status
+import os
+import time
+from contextlib import contextmanager
+
+from app.status import ItemStatus, movie_status, search_time, series_status
+
+
+@contextmanager
+def _timezone(name: str):
+    """Часовой пояс процесса — то же, что часовой пояс контейнера bridge.
+
+    В compose он задаётся переменной TZ; здесь подменяется явно, потому что
+    иначе тест проверял бы часовой пояс машины, на которой его запустили.
+    """
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = name
+    time.tzset()
+    try:
+        yield
+    finally:
+        if old is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = old
+        time.tzset()
+
+
+def test_search_time_converts_utc_to_local():
+    """Radarr отдаёт UTC. «13:39» без пометки в UTC+3 прочтётся как местное и
+    разойдётся с действительностью на три часа — молча."""
+    with _timezone("Europe/Moscow"):
+        assert search_time("2026-08-02T13:39:54Z") == "16:39"
+
+
+def test_search_time_marks_utc_when_container_is_utc():
+    """Часовой пояс не задан — время печатается с пометкой, а не как местное."""
+    with _timezone("UTC"):
+        assert search_time("2026-08-02T13:39:54Z") == "13:39 UTC"
+
+
+def test_search_time_handles_offset_and_fractions():
+    """Точность и смещение у *arr между версиями менялись."""
+    with _timezone("Europe/Moscow"):
+        assert search_time("2026-08-02T13:39:54.0161618Z") == "16:39"
+        assert search_time("2026-08-02T16:39:54+03:00") == "16:39"
+
+
+def test_search_time_unknown_format_is_not_guessed():
+    """Разобрать не удалось — говорим «?», а не показываем срез строки:
+    выдуманное время хуже отсутствующего."""
+    assert search_time("02.08.2026 13:39") == "?"
+    assert search_time(None) == "?"
 
 
 def _movie(**over) -> dict:
@@ -44,8 +95,8 @@ def _queue_record(**over) -> dict:
     return base
 
 
-def _search_command(movie_ids, status="started") -> dict:
-    return {"name": "MoviesSearch", "status": status, "body": {"movieIds": movie_ids}}
+def _search_command(movie_ids, status="started", name="MoviesSearch") -> dict:
+    return {"name": name, "status": status, "body": {"movieIds": movie_ids}}
 
 
 def test_not_ordered_when_absent_from_radarr():
@@ -69,6 +120,31 @@ def test_in_library_when_has_file():
 def test_searching_when_command_running():
     s = movie_status(_movie(), [], [_search_command([5])])
     assert s.state == "searching"
+
+
+def test_refresh_movie_command_is_not_searching():
+    """RefreshMovie несёт тот же body.movieIds, что и MoviesSearch.
+
+    Radarr ставит эту команду СРАЗУ после добавления фильма — ровно в тот
+    момент, когда человек нажал «Заказать» и открывает карточку. Фильтр по
+    одному только movieIds объявил бы «Ищется релиз…» на обычном обновлении
+    метаданных. Форма ответа записана: tests/recorded/radarr-command-refresh.json.
+    """
+    s = movie_status(_movie(), [], [_search_command([5], name="RefreshMovie")])
+    assert s.state == "waiting"
+
+
+def test_rename_movie_command_is_not_searching():
+    """RenameMovie — та же болезнь, что и RefreshMovie: свой movieIds."""
+    s = movie_status(_movie(), [], [_search_command([5], name="RenameMovie")])
+    assert s.state == "waiting"
+
+
+def test_refresh_movie_does_not_hide_in_library():
+    """Худший случай промаха: файл на диске, а карточка обещает поиск."""
+    movie = _movie(hasFile=True, movieFile={"quality": {"quality": {"name": "Bluray-1080p"}}})
+    s = movie_status(movie, [], [_search_command([5], name="RefreshMovie")])
+    assert s.state == "in_library"
 
 
 def test_search_command_for_another_movie_is_ignored():
@@ -110,9 +186,65 @@ def test_stuck_wins_over_downloading():
 
 
 def test_stuck_from_status_messages():
-    rec = _queue_record(statusMessages=[{"title": "x", "messages": ["Not an upgrade"]}])
+    rec = _queue_record(
+        trackedDownloadStatus="warning",
+        statusMessages=[{"title": "x", "messages": ["Not an upgrade"]}],
+    )
     s = movie_status(_movie(), [rec], [])
     assert s.state == "stuck"
+
+
+def test_stuck_detail_falls_back_to_title():
+    """TrackedDownloadStatusMessage бывает с пустым messages.
+
+    *arr кладут туда и `(title, [])`: Warn("No files found are eligible for
+    import in {0}") создаёт запись, где весь текст лежит в title. Схема
+    (openapi/, TrackedDownloadStatusMessage) обе формы допускает. Писать
+    «причина не указана», когда причина в ответе есть, — то самое молчаливое
+    расхождение, против которого написан проект.
+    """
+    rec = _queue_record(
+        trackedDownloadStatus="warning",
+        statusMessages=[
+            {"title": "No files found are eligible for import in /data", "messages": []}
+        ],
+    )
+    s = movie_status(_movie(), [rec], [])
+    assert s.state == "stuck"
+    assert "eligible for import" in (s.detail or "")
+
+
+def test_stuck_detail_prefers_message_over_title():
+    """Когда messages не пуст, берётся он: там подробность, в title — заголовок."""
+    rec = _queue_record(
+        trackedDownloadStatus="error",
+        statusMessages=[{"title": "заголовок", "messages": ["подробность"]}],
+    )
+    assert movie_status(_movie(), [rec], []).detail == "подробность"
+
+
+def test_status_messages_with_ok_status_are_not_stuck():
+    """trackedDownloadStatus=ok — оценка самого Radarr: с загрузкой всё в
+    порядке. Кричать «застряла» по справочным сообщениям значит поднимать
+    ложную тревогу."""
+    rec = _queue_record(statusMessages=[{"title": "Truncated", "messages": ["info"]}])
+    assert rec["trackedDownloadStatus"] == "ok"
+    s = movie_status(_movie(), [rec], [])
+    assert s.state == "downloading"
+
+
+def test_error_message_is_stuck_even_when_status_ok():
+    """Главное правило не трогаем: errorMessage — затык при любом статусе."""
+    rec = _queue_record(errorMessage="disk full")
+    assert rec["trackedDownloadStatus"] == "ok"
+    assert movie_status(_movie(), [rec], []).state == "stuck"
+
+
+def test_status_messages_without_tracked_status_are_stuck():
+    """Поля нет — трактуем в пользу затыка: промолчать о беде хуже."""
+    rec = _queue_record(statusMessages=[{"title": "x", "messages": ["y"]}])
+    del rec["trackedDownloadStatus"]
+    assert movie_status(_movie(), [rec], []).state == "stuck"
 
 
 def test_unmonitored_beats_not_found():
@@ -376,6 +508,73 @@ def test_season_not_ordered_when_unmonitored_and_empty():
     )
     s = series_status(series, _episodes(monitored=False), [], [])
     assert s.seasons[0].state == "not_ordered"
+
+
+def _unmonitored_season(files=0, total=10) -> dict:
+    """Сезон, с которого стек сам снял мониторинг.
+
+    Инвариант «ровно один сезон под мониторингом»: при заказе следующего
+    сезона предыдущий размонитируется. Если он в этот момент качается,
+    флаг мониторинга уже врёт, а очередь — нет."""
+    return _series(
+        seasons=[
+            {
+                "seasonNumber": 2,
+                "monitored": False,
+                "statistics": {
+                    "episodeFileCount": files,
+                    "episodeCount": total,
+                    "totalEpisodeCount": total,
+                },
+            }
+        ]
+    )
+
+
+def test_unmonitored_season_in_queue_is_downloading():
+    """Факт (запись в очереди) побеждает флаг мониторинга.
+
+    Иначе качающийся прямо сейчас сезон показывается как «не заказан» —
+    и человек заказывает его второй раз."""
+    s = series_status(_unmonitored_season(), _episodes(monitored=False), [_tv_queue()], [])
+    assert s.seasons[0].state == "downloading"
+
+
+def test_unmonitored_season_stuck_is_visible():
+    """Тот же случай с ошибкой: затык на размонитированном сезоне обязан быть
+    виден, а не спрятан за «не заказан»."""
+    s = series_status(
+        _unmonitored_season(),
+        _episodes(monitored=False),
+        [_tv_queue(errorMessage="disk full")],
+        [],
+    )
+    assert s.seasons[0].state == "stuck"
+    assert "disk full" in s.seasons[0].label
+
+
+def test_unmonitored_season_without_queue_is_still_not_ordered():
+    """Обратная сторона: без очереди и файлов сезон по-прежнему «не заказан»."""
+    s = series_status(_unmonitored_season(), _episodes(monitored=False), [], [])
+    assert s.seasons[0].state == "not_ordered"
+
+
+def test_full_season_with_unmonitored_episodes_is_in_library():
+    """monitoring_broken — предупреждение «загрузка не начнётся». На сезоне,
+    где качать нечего (10 файлов из 10), оно ложное, а через приоритет ещё и
+    перебивает подпись всей карточки."""
+    series = _series(
+        seasons=[
+            {
+                "seasonNumber": 2,
+                "monitored": True,
+                "statistics": {"episodeFileCount": 10, "episodeCount": 10, "totalEpisodeCount": 10},
+            }
+        ]
+    )
+    s = series_status(series, _episodes(monitored=False, with_file=10), [], [])
+    assert s.seasons[0].state == "in_library"
+    assert s.state == "in_library"
 
 
 def test_season_not_found_uses_episode_search_time():

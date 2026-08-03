@@ -13,6 +13,7 @@
 """
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 
 @dataclass(frozen=True)
@@ -65,26 +66,63 @@ def human_size(num: int | None) -> str:
 
 
 def search_time(raw: str | None) -> str:
-    """Время последнего поиска в виде ЧЧ:ММ.
+    """Время последнего поиска в виде ЧЧ:ММ по часам того, кто читает.
 
-    Строка ISO приходит от Radarr; разбирается срезом, а не парсером даты:
-    смещение и точность у *arr менялись между версиями, а нам нужны часы и
-    минуты.
+    *arr отдают UTC («…T13:39:54Z»). Печатать этот срез как есть нельзя: в
+    UTC+3 человек прочтёт «в 13:39», хотя искали в 16:39, — расхождение
+    молчаливое и выглядящее правдоподобно. Поэтому время переводится в
+    часовой пояс контейнера (TZ прокинут в bridge через compose), а если
+    пояс контейнера сам UTC, к времени приписывается «UTC»: тогда подпись
+    честна при любой настройке.
+
+    Разбор — парсером, а не срезом: без разбора перевод невозможен. Формат,
+    который разобрать не удалось, даёт «?»: выдуманное время хуже
+    отсутствующего.
     """
-    if not raw or len(raw) < 16:
+    if not raw:
         return "?"
-    return raw[11:16]
+    try:
+        parsed = datetime.fromisoformat(raw.strip())
+    except ValueError:
+        return "?"
+    if parsed.tzinfo is None:
+        # Без смещения — по документации *arr это UTC.
+        parsed = parsed.replace(tzinfo=UTC)
+    local = parsed.astimezone()
+    text = local.strftime("%H:%M")
+    if local.utcoffset() == timedelta(0):
+        text += " UTC"
+    return text
 
 
-def _running_search(commands: list[dict], key: str, value: object) -> bool:
+# Имена команд, означающих поиск релиза. Фильтровать по одному только
+# body.movieIds нельзя: тот же ключ несут RefreshMovie и RenameMovie, а
+# RefreshMovie Radarr ставит СРАЗУ после добавления фильма — ровно в тот
+# момент, когда человек нажал «Заказать» и открывает карточку. Форма ответа
+# записана с живого Radarr: tests/recorded/radarr-command-refresh.json,
+# name=RefreshMovie, status=queued, body.movieIds=[5].
+_MOVIE_SEARCH = {"MoviesSearch"}
+_SEASON_SEARCH = {"SeasonSearch"}
+
+
+def _is_active(command: dict, names: set[str]) -> bool:
+    """Команда с таким именем выполняется прямо сейчас.
+
+    Активными считаются queued и started: между ними разница только в том,
+    дошли ли до неё руки планировщика.
+    """
+    return command.get("status") in ("started", "queued") and command.get("name") in names
+
+
+def _running_search(commands: list[dict], names: set[str], key: str, value: object) -> bool:
     """Идёт ли прямо сейчас поиск, относящийся к нашему объекту.
 
     Это ФАКТ, прочитанный у Radarr, а не вывод по косвенным признакам:
-    /api/v3/command отдаёт body.movieIds и status. Проверено на живом стенде.
-    Команда считается активной в статусах queued и started.
+    /api/v3/command отдаёт name, status и body.movieIds. Проверено на живом
+    стенде.
     """
     for c in commands:
-        if c.get("status") not in ("started", "queued"):
+        if not _is_active(c, names):
             continue
         body = c.get("body") or {}
         found = body.get(key)
@@ -96,17 +134,41 @@ def _running_search(commands: list[dict], key: str, value: object) -> bool:
 
 
 def _is_stuck(record: dict) -> bool:
+    """Затык: загрузка идёт, а продвижения не будет без человека.
+
+    errorMessage — затык всегда и при любом статусе: главное правило
+    «затык побеждает прогресс» не обсуждается.
+
+    Со statusMessages сложнее. Раньше любая непустая запись давала stuck, но
+    у той же записи очереди есть trackedDownloadStatus (enum ok/warning/error,
+    есть в обеих схемах openapi/) — оценка самой загрузки, сделанная *arr.
+    При «ok» statusMessages носят справочный характер, и объявлять по ним
+    затык значит поднимать тревогу на исправной загрузке. Поэтому «ok»
+    сообщения глушит, а всё остальное — включая отсутствующее и незнакомое
+    значение — трактуется в пользу затыка: промолчать о беде хуже, чем
+    сказать лишнее.
+    """
     if record.get("errorMessage"):
         return True
-    return bool(record.get("statusMessages"))
+    if not record.get("statusMessages"):
+        return False
+    return str(record.get("trackedDownloadStatus") or "").lower() != "ok"
 
 
 def _stuck_detail(record: dict) -> str:
+    """Текст причины. Схема TrackedDownloadStatusMessage — это (title, messages),
+    и обе части необязательны: Warn("No files found are eligible for import
+    in {0}") кладёт весь текст в title, оставляя messages пустым. Брать только
+    messages значило бы написать «причина не указана» при том, что причина в
+    ответе есть."""
     if record.get("errorMessage"):
         return str(record["errorMessage"])
     for block in record.get("statusMessages") or []:
         for message in block.get("messages") or []:
             return str(message)
+        title = block.get("title")
+        if title:
+            return str(title)
     return "причина не указана"
 
 
@@ -142,7 +204,7 @@ def movie_status(movie: dict | None, queue: list[dict], commands: list[dict]) ->
 
     movie_id = movie.get("id")
 
-    if _running_search(commands, "movieIds", movie_id):
+    if _running_search(commands, _MOVIE_SEARCH, "movieIds", movie_id):
         state = "searching"
         return ItemStatus(state=state, label="Ищется релиз…", can_order=_can_order(state))
 
@@ -240,12 +302,21 @@ def _season_status(
     def done(state: str, label: str) -> SeasonStatus:
         return SeasonStatus(season=number, state=state, label=label)
 
-    if not season.get("monitored") and files == 0:
+    mine_q = [
+        r for r in queue if r.get("seriesId") == series_id and r.get("seasonNumber") == number
+    ]
+
+    # «Не заказан» — вывод из флага мониторинга, и потому проигрывает факту.
+    # Стек сам снимает мониторинг с предыдущего сезона (инвариант «ровно один
+    # сезон под мониторингом»), так что качающийся прямо сейчас сезон нередко
+    # уже размонитирован. Запись в очереди — событие, флаг — намерение;
+    # показать «не заказан» поверх идущей загрузки значит спрятать и её, и
+    # затык, и подтолкнуть заказать второй раз.
+    if not season.get("monitored") and files == 0 and not mine_q:
         return done("not_ordered", "не заказан")
 
     searching = any(
-        c.get("status") in ("started", "queued")
-        and c.get("name") == "SeasonSearch"
+        _is_active(c, _SEASON_SEARCH)
         and (c.get("body") or {}).get("seriesId") == series_id
         and (c.get("body") or {}).get("seasonNumber") == number
         for c in commands
@@ -255,15 +326,17 @@ def _season_status(
 
     # Раньше очереди и статистики намеренно: сломанный мониторинг надо
     # показать, даже если часть серий скачана прошлым заказом.
-    if season.get("monitored") and mine_eps and not monitored_eps:
+    #
+    # Но только когда есть что качать: «загрузка не начнётся» на сезоне из
+    # десяти файлов из десяти — ложная тревога, а через приоритет она ещё и
+    # перебивает подпись всей карточки.
+    missing = files < total or total == 0
+    if season.get("monitored") and mine_eps and not monitored_eps and missing:
         return done(
             "monitoring_broken",
             "мониторинг сломан — серии не отслеживаются, загрузка не начнётся",
         )
 
-    mine_q = [
-        r for r in queue if r.get("seriesId") == series_id and r.get("seasonNumber") == number
-    ]
     for record in mine_q:
         if _is_stuck(record):
             return done("stuck", f"загрузка застряла: {_stuck_detail(record)}")

@@ -173,6 +173,11 @@ services:
     image: ${BRIDGE_IMAGE:-ghcr.io/meklon/lampa_bundle/bridge}:${STACK_VERSION:-latest}
     container_name: bridge
     environment:
+      # Часовой пояс нужен не логам, а тексту в карточке: /status печатает
+      # время последнего поиска, а *arr отдают его в UTC. Без TZ контейнер
+      # живёт по UTC, и bridge честно припишет к времени «UTC» — но читать
+      # «в 13:39 UTC» вместо «в 16:39» человеку незачем.
+      - TZ=${TZ}
       - BRIDGE_ENV=${BRIDGE_ENV}
       - RADARR_URL=http://radarr:7878
       - RADARR_API_KEY=${RADARR_API_KEY}
