@@ -87,9 +87,17 @@ def test_downloading_shows_percent():
     assert "50%" in s.label
 
 
-def test_importing():
+def test_import_pending_shows_as_importing():
+    """importPending из TrackedDownloadState enum."""
     s = movie_status(_movie(), [_queue_record(trackedDownloadState="importPending")], [])
     assert s.state == "importing"
+
+
+def test_import_active_shows_as_importing():
+    """importing из TrackedDownloadState enum."""
+    s = movie_status(_movie(), [_queue_record(trackedDownloadState="importing")], [])
+    assert s.state == "importing"
+    assert s.label == "Импортируется"
 
 
 def test_stuck_wins_over_downloading():
@@ -190,16 +198,18 @@ def test_queued_search_command_counts_as_searching():
     assert s.can_order is False
 
 
-def test_import_pending_shows_as_importing():
-    """importPending — это идущий импорт."""
-    s = movie_status(_movie(), [_queue_record(trackedDownloadState="importPending")], [])
-    assert s.state == "importing"
-    assert s.label == "Импортируется"
-
-
 def test_import_blocked_shows_as_stuck():
     """importBlocked — это заблокированный импорт, состояние stuck."""
     s = movie_status(_movie(), [_queue_record(trackedDownloadState="importBlocked")], [])
     assert s.state == "stuck"
     assert "заблокирован" in s.label.lower()
     assert s.can_order is False
+
+
+def test_imported_shows_as_downloading():
+    """imported — файл уже завершил импорт, но не переместился в место назначения.
+    Обычно это should быть перехвачено hasFile, но на промежуточном этапе показываем
+    как downloading, пока не обновится статус фильма."""
+    s = movie_status(_movie(), [_queue_record(trackedDownloadState="imported")], [])
+    # imported не совпадает с _IMPORT_ACTIVE и _IMPORT_BLOCKED, поэтому проваливается в downloading
+    assert s.state == "downloading"

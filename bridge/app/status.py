@@ -34,6 +34,11 @@ class ItemStatus:
 # Состояния, при которых заказ уже в работе и повторять его незачем.
 _BUSY = {"searching", "stuck", "importing", "downloading", "in_library"}
 
+# TrackedDownloadState enum из openapi/radarr-v3-v6.3.0.10514.json:
+# downloading, importBlocked, importPending, importing, imported, failedPending, failed, ignored
+_IMPORT_BLOCKED = {"importBlocked"}
+_IMPORT_ACTIVE = {"importPending", "importing"}
+
 
 def _can_order(state: str) -> bool:
     """Можно ли заказать при данном состоянии."""
@@ -135,7 +140,7 @@ def movie_status(movie: dict | None, queue: list[dict], commands: list[dict]) ->
             )
     for record in mine:
         download_state = str(record.get("trackedDownloadState", ""))
-        if download_state.startswith("importBlocked"):
+        if download_state in _IMPORT_BLOCKED:
             state = "stuck"
             return ItemStatus(
                 state=state,
@@ -143,7 +148,7 @@ def movie_status(movie: dict | None, queue: list[dict], commands: list[dict]) ->
                 detail="Файл не может быть импортирован",
                 can_order=_can_order(state),
             )
-        if download_state.startswith("importPending"):
+        if download_state in _IMPORT_ACTIVE:
             state = "importing"
             return ItemStatus(state=state, label="Импортируется", can_order=_can_order(state))
     for record in mine:
