@@ -5,7 +5,15 @@
 # и запускаются отдельно. См. docs/ACCEPTANCE.md.
 set -uo pipefail
 
-cd "$(dirname "$0")" || exit 1
+# НЕ переходим в каталог скрипта: проверки вызывают docker compose, а он
+# резолвит проект по текущему рабочему каталогу. Сам репозиторий держит
+# собственный docker-compose.yml (для разработки), и переход в checks/
+# заставлял docker compose искать его в родительских каталогах вместо
+# развёрнутого стенда в /opt/media-stack — команды тихо резолвились не в
+# тот проект и молча отдавали пустой результат вместо ошибки. Поэтому
+# проверки запускаются по абсолютному пути, а рабочий каталог остаётся
+# тем, из которого вызван run-all.sh (обычно — каталог стенда).
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)" || exit 1
 RC=0
 
 # 08 идёт последним по номеру, но аргументов не требует и потому здесь:
@@ -14,13 +22,13 @@ for c in 01-containers.sh 02-data-layout.sh 03-prowlarr-sync.sh 04-hardlink.sh \
          08-qbt-savepath.sh 09-status.sh; do
   echo
   echo "############ $c"
-  bash "./$c" || RC=1
+  bash "$SCRIPT_DIR/$c" || RC=1
 done
 
 echo
 echo "############ Требуют аргументов, запускать вручную:"
-echo "  ./05-bridge-movie.sh  <tmdb_id>"
-echo "  ./06-bridge-season.sh <tmdb_id> <season>"
-echo "  ./07-pipeline.sh      <ожидаемый-путь-от-/data/media>"
+echo "  $SCRIPT_DIR/05-bridge-movie.sh  <tmdb_id>"
+echo "  $SCRIPT_DIR/06-bridge-season.sh <tmdb_id> <season>"
+echo "  $SCRIPT_DIR/07-pipeline.sh      <ожидаемый-путь-от-/data/media>"
 
 exit "$RC"
