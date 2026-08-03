@@ -421,7 +421,7 @@ failedPending, failed, ignored
 | `not_ordered` | сезон не отслеживается, файлов сезона нет **и записи в очереди тоже нет** |
 | `searching` | в `/command` есть `SeasonSearch` со `status=started`/`queued`, нашими `seriesId` и `seasonNumber` |
 | `monitoring_broken` | сезон `monitored=true`, **ни один эпизод сезона не отслеживается**, и файлов не хватает (`episodeFileCount < totalEpisodeCount`) |
-| `stuck` | в `/queue` запись этого сезона с `errorMessage`/`statusMessages`, либо `trackedDownloadState=importBlocked` |
+| `stuck` | в `/queue` запись этого сезона с `errorMessage`, либо с непустыми `statusMessages` при `trackedDownloadStatus` ≠ `ok`, либо с `trackedDownloadState=importBlocked` |
 | `importing` | в `/queue` запись этого сезона, `trackedDownloadState` — `importPending`/`importing` |
 | `downloading` | запись этого сезона в `/queue` |
 | `in_library` | `episodeFileCount == totalEpisodeCount` и он больше нуля |
