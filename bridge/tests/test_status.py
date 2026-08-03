@@ -5,7 +5,7 @@
 openapi-схем Radarr и Sonarr, конкретные значения подставлены в фикстурах теста.
 """
 
-from app.status import ItemStatus, movie_status
+from app.status import ItemStatus, movie_status, series_status
 
 
 def _movie(**over) -> dict:
@@ -213,3 +213,209 @@ def test_imported_shows_as_downloading():
     s = movie_status(_movie(), [_queue_record(trackedDownloadState="imported")], [])
     # imported не совпадает с _IMPORT_ACTIVE и _IMPORT_BLOCKED, поэтому проваливается в downloading
     assert s.state == "downloading"
+
+
+def _series(seasons=None, **over) -> dict:
+    """Сериал в Sonarr. Форма seasons[].statistics записана с живого стенда:
+    episodeFileCount, episodeCount, totalEpisodeCount."""
+    base = {
+        "id": 1,
+        "title": "Silo",
+        "seasons": seasons
+        if seasons is not None
+        else [
+            {
+                "seasonNumber": 2,
+                "monitored": True,
+                "statistics": {
+                    "episodeFileCount": 0,
+                    "episodeCount": 10,
+                    "totalEpisodeCount": 10,
+                },
+            }
+        ],
+    }
+    base.update(over)
+    return base
+
+
+def _episodes(season=2, count=10, monitored=True, with_file=0) -> list[dict]:
+    out = []
+    for i in range(1, count + 1):
+        out.append(
+            {
+                "id": 100 + i,
+                "seriesId": 1,
+                "seasonNumber": season,
+                "episodeNumber": i,
+                "monitored": monitored,
+                "hasFile": i <= with_file,
+                "lastSearchTime": None,
+            }
+        )
+    return out
+
+
+def _tv_queue(**over) -> dict:
+    base = {
+        "seriesId": 1,
+        "seasonNumber": 2,
+        "title": "Silo.S02E01",
+        "size": 1000,
+        "sizeleft": 400,
+        "timeleft": "00:02:00",
+        "trackedDownloadState": "downloading",
+        "errorMessage": None,
+        "statusMessages": [],
+    }
+    base.update(over)
+    return base
+
+
+def test_series_not_ordered_when_absent():
+    s = series_status(None, [], [], [])
+    assert s.state == "not_ordered"
+    assert s.can_order is True
+
+
+def test_series_can_order_is_always_true():
+    """Другой сезон заказать можно в любой момент."""
+    s = series_status(_series(), _episodes(), [_tv_queue()], [])
+    assert s.can_order is True
+
+
+def test_monitoring_broken_is_detected():
+    """Отказ восьмого этапа: сезон отслеживается, эпизоды нет.
+
+    Заказ проходит, поиск находит релизы и не берёт ни одного. Ни ошибки, ни
+    записи в истории. Здесь он обязан стать видимым."""
+    s = series_status(_series(), _episodes(monitored=False), [], [])
+    assert s.seasons[0].state == "monitoring_broken"
+    assert s.state == "monitoring_broken"
+    assert "не отслеж" in s.seasons[0].label
+
+
+def test_monitoring_broken_beats_partial():
+    """Сломанный мониторинг показывается, даже если часть серий уже скачана."""
+    series = _series(
+        seasons=[
+            {
+                "seasonNumber": 2,
+                "monitored": True,
+                "statistics": {"episodeFileCount": 3, "episodeCount": 0, "totalEpisodeCount": 10},
+            }
+        ]
+    )
+    s = series_status(series, _episodes(monitored=False, with_file=3), [], [])
+    assert s.seasons[0].state == "monitoring_broken"
+
+
+def test_season_in_library_when_all_files_present():
+    series = _series(
+        seasons=[
+            {
+                "seasonNumber": 2,
+                "monitored": True,
+                "statistics": {"episodeFileCount": 10, "episodeCount": 10, "totalEpisodeCount": 10},
+            }
+        ]
+    )
+    s = series_status(series, _episodes(with_file=10), [], [])
+    assert s.seasons[0].state == "in_library"
+    assert "10 из 10" in s.seasons[0].label
+
+
+def test_season_partial():
+    series = _series(
+        seasons=[
+            {
+                "seasonNumber": 2,
+                "monitored": True,
+                "statistics": {"episodeFileCount": 3, "episodeCount": 10, "totalEpisodeCount": 10},
+            }
+        ]
+    )
+    s = series_status(series, _episodes(with_file=3), [], [])
+    assert s.seasons[0].state == "partial"
+    assert "3 из 10" in s.seasons[0].label
+
+
+def test_season_downloading():
+    s = series_status(_series(), _episodes(), [_tv_queue()], [])
+    assert s.seasons[0].state == "downloading"
+    assert s.state == "downloading"
+    assert "Сезон 2" in s.label
+
+
+def test_season_stuck_wins():
+    s = series_status(_series(), _episodes(), [_tv_queue(errorMessage="disk full")], [])
+    assert s.seasons[0].state == "stuck"
+
+
+def test_season_searching():
+    cmd = {"name": "SeasonSearch", "status": "started", "body": {"seriesId": 1, "seasonNumber": 2}}
+    s = series_status(_series(), _episodes(), [], [cmd])
+    assert s.seasons[0].state == "searching"
+
+
+def test_season_search_of_another_season_ignored():
+    cmd = {"name": "SeasonSearch", "status": "started", "body": {"seriesId": 1, "seasonNumber": 5}}
+    s = series_status(_series(), _episodes(), [], [cmd])
+    assert s.seasons[0].state == "waiting"
+
+
+def test_season_not_ordered_when_unmonitored_and_empty():
+    series = _series(
+        seasons=[
+            {
+                "seasonNumber": 2,
+                "monitored": False,
+                "statistics": {"episodeFileCount": 0, "episodeCount": 0, "totalEpisodeCount": 10},
+            }
+        ]
+    )
+    s = series_status(series, _episodes(monitored=False), [], [])
+    assert s.seasons[0].state == "not_ordered"
+
+
+def test_season_not_found_uses_episode_search_time():
+    eps = _episodes()
+    eps[0]["lastSearchTime"] = "2026-08-02T13:39:54Z"
+    s = series_status(_series(), eps, [], [])
+    assert s.seasons[0].state == "not_found"
+
+
+def test_series_state_takes_most_urgent_season():
+    """Приоритет сведения: затык важнее скачанного сезона."""
+    series = _series(
+        seasons=[
+            {
+                "seasonNumber": 1,
+                "monitored": True,
+                "statistics": {"episodeFileCount": 10, "episodeCount": 10, "totalEpisodeCount": 10},
+            },
+            {
+                "seasonNumber": 2,
+                "monitored": True,
+                "statistics": {"episodeFileCount": 0, "episodeCount": 10, "totalEpisodeCount": 10},
+            },
+        ]
+    )
+    eps = _episodes(season=1, with_file=10) + _episodes(season=2)
+    s = series_status(series, eps, [_tv_queue(errorMessage="disk full")], [])
+    assert s.state == "stuck"
+    assert "Сезон 2" in s.label
+
+
+def test_specials_season_zero_is_included():
+    series = _series(
+        seasons=[
+            {
+                "seasonNumber": 0,
+                "monitored": False,
+                "statistics": {"episodeFileCount": 0, "episodeCount": 0, "totalEpisodeCount": 4},
+            }
+        ]
+    )
+    s = series_status(series, _episodes(season=0, count=4, monitored=False), [], [])
+    assert s.seasons[0].season == 0

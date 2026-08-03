@@ -116,6 +116,24 @@ def _quality_name(movie: dict) -> str | None:
     return str(quality) if quality else None
 
 
+# Приоритет сведения сезонов в состояние сериала: что показать в карточке,
+# когда сезоны в разных состояниях. Отличается от порядка проверок внутри
+# сезона: там важно не перепутать причину, здесь — показать самое требующее
+# внимания.
+_SERIES_PRIORITY = [
+    "stuck",
+    "monitoring_broken",
+    "downloading",
+    "importing",
+    "searching",
+    "partial",
+    "in_library",
+    "not_found",
+    "waiting",
+    "not_ordered",
+]
+
+
 def movie_status(movie: dict | None, queue: list[dict], commands: list[dict]) -> ItemStatus:
     """Состояние фильма. Порядок проверок обязателен, см. спецификацию."""
     if movie is None:
@@ -202,4 +220,104 @@ def movie_status(movie: dict | None, queue: list[dict], commands: list[dict]) ->
         state=state,
         label="Заказан, поиск ещё не запускался",
         can_order=_can_order(state),
+    )
+
+
+def _season_status(
+    season: dict,
+    episodes: list[dict],
+    queue: list[dict],
+    commands: list[dict],
+    series_id: int,
+) -> SeasonStatus:
+    number = int(season.get("seasonNumber", 0))
+    stats = season.get("statistics") or {}
+    total = int(stats.get("totalEpisodeCount") or 0)
+    files = int(stats.get("episodeFileCount") or 0)
+    mine_eps = [e for e in episodes if e.get("seasonNumber") == number]
+    monitored_eps = [e for e in mine_eps if e.get("monitored")]
+
+    def done(state: str, label: str) -> SeasonStatus:
+        return SeasonStatus(season=number, state=state, label=label)
+
+    if not season.get("monitored") and files == 0:
+        return done("not_ordered", "не заказан")
+
+    searching = any(
+        c.get("status") == "started"
+        and c.get("name") == "SeasonSearch"
+        and (c.get("body") or {}).get("seriesId") == series_id
+        and (c.get("body") or {}).get("seasonNumber") == number
+        for c in commands
+    )
+    if searching:
+        return done("searching", "ищется релиз…")
+
+    # Раньше очереди и статистики намеренно: сломанный мониторинг надо
+    # показать, даже если часть серий скачана прошлым заказом.
+    if season.get("monitored") and mine_eps and not monitored_eps:
+        return done(
+            "monitoring_broken",
+            "мониторинг сломан — серии не отслеживаются, загрузка не начнётся",
+        )
+
+    mine_q = [
+        r for r in queue if r.get("seriesId") == series_id and r.get("seasonNumber") == number
+    ]
+    for record in mine_q:
+        if _is_stuck(record):
+            return done("stuck", f"загрузка застряла: {_stuck_detail(record)}")
+    for record in mine_q:
+        if str(record.get("trackedDownloadState", "")).startswith("import"):
+            return done("importing", "импортируется")
+    if mine_q:
+        size = sum(r.get("size") or 0 for r in mine_q)
+        left = sum(r.get("sizeleft") or 0 for r in mine_q)
+        return done(
+            "downloading", f"закачивается {_percent(size, left)}% · {files} из {total} серий"
+        )
+
+    if total and files >= total:
+        return done("in_library", f"в библиотеке · {files} из {total}")
+    if files:
+        return done("partial", f"{files} из {total} серий")
+
+    last = next((e.get("lastSearchTime") for e in mine_eps if e.get("lastSearchTime")), None)
+    if last:
+        return done("not_found", f"при поиске в {search_time(last)} релизов не нашлось")
+    return done("waiting", "заказан, поиск ещё не запускался")
+
+
+def series_status(
+    series: dict | None,
+    episodes: list[dict],
+    queue: list[dict],
+    commands: list[dict],
+) -> ItemStatus:
+    """Состояние сериала: сводка плюс разбивка по сезонам.
+
+    can_order всегда True: другой сезон заказать можно в любой момент.
+    """
+    if series is None:
+        return ItemStatus(state="not_ordered", label="Заказать", can_order=True, seasons=[])
+
+    series_id = int(series.get("id", 0))
+    seasons = [
+        _season_status(s, episodes, queue, commands, series_id)
+        for s in sorted(series.get("seasons") or [], key=lambda s: s.get("seasonNumber", 0))
+    ]
+    if not seasons:
+        return ItemStatus(state="not_ordered", label="Заказать", can_order=True, seasons=[])
+
+    order = {name: i for i, name in enumerate(_SERIES_PRIORITY)}
+    top = min(seasons, key=lambda s: order.get(s.state, len(order)))
+    if top.state == "not_ordered":
+        return ItemStatus(state="not_ordered", label="Заказать", can_order=True, seasons=seasons)
+
+    name = "Спецвыпуски" if top.season == 0 else f"Сезон {top.season}"
+    return ItemStatus(
+        state=top.state,
+        label=f"{name}: {top.label}",
+        can_order=True,
+        seasons=seasons,
     )
