@@ -159,3 +159,23 @@ def test_movie_ids_alone_do_not_mean_search():
 
     movie = _movie(id=refresh["body"]["movieIds"][0])
     assert movie_status(movie, [], [refresh]).state != "searching"
+
+
+def test_movies_search_command_name_matches_recorded():
+    """Всё состояние `searching` держится на точном совпадении строки
+    `MoviesSearch` в `_MOVIE_SEARCH`. Опечатка в ней дала бы ложноотрицательный
+    результат молча — состояние не показалось бы никогда, и ни один
+    рукописный тест (пишущий то же предположение об имени, что и код) этого
+    не поймает. Ответ записан с живого Radarr: `POST /api/v3/command`
+    `{"name":"MoviesSearch","movieIds":[3]}` на «Piper» (tmdbId=399106,
+    короткометражка Pixar без единого релиза на подключённом трекере) —
+    завершился как «Completed search for 1 movies. 0 reports downloaded.»,
+    очередь Radarr осталась пустой.
+    """
+    search = recorded("radarr-command-search")
+    assert search["name"] in _MOVIE_SEARCH
+    assert search["status"] in ("queued", "started")
+    assert search["body"]["movieIds"], search["body"]
+
+    movie = _movie(id=search["body"]["movieIds"][0])
+    assert movie_status(movie, [], [search]).state == "searching"
