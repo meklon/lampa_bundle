@@ -82,6 +82,34 @@ def test_plugin_shows_label_instead_of_order():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="нужен node")
+def test_plugin_series_can_refresh_status():
+    """У сериала «Обновить» обязано быть достижимо.
+
+    can_order у сериала всегда true (другой сезон заказать можно в любой
+    момент), поэтому экран подробностей, где живёт «Обновить», для ТВ-карточки
+    не открывается никогда, а повторный вход в карточку состояние не
+    перезапрашивает. Без пункта в списке сезонов обещанное спецификацией
+    ручное обновление у сериала не работает вовсе.
+
+    Проверяется и то, что обновление не превратилось в заказ: orders=0.
+    """
+    r = subprocess.run(
+        ["node", str(HARNESS), "series-refresh"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert r.returncode == 0, r.stderr
+    assert "refresh-items=1" in r.stdout, r.stdout
+    assert "season-items=6" in r.stdout, r.stdout
+    assert "status-requests=2" in r.stdout, r.stdout
+    assert "orders=0" in r.stdout, r.stdout
+    assert "button=Сезон 2: закачивается 44%" in r.stdout, r.stdout
+    # Свежее состояние доехало и до подписей сезонов, а не только до кнопки.
+    assert "season-2-label=Сезон 2 — закачивается 44%" in r.stdout, r.stdout
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="нужен node")
 def test_plugin_reopen_card_keeps_single_button_and_status_request():
     """'complite' приходит и при возврате в карточку — кнопка и запрос
     состояния не должны задвоиться (см. ранний return в addButton)."""

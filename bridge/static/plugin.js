@@ -224,7 +224,7 @@
       });
   }
 
-  function pickSeason(card, status, callback) {
+  function pickSeason(card, status, btn, callback) {
     if (!card.seasons.length) {
       // Сезонов в данных нет — не выдумываем номер, говорим прямо.
       notify('У сериала не видно сезонов, заказывать нечего');
@@ -248,11 +248,23 @@
       return { title: title, season: n };
     });
 
+    // «Обновить» живёт ЗДЕСЬ, а не только на экране подробностей. У сериала
+    // can_order всегда true (другой сезон заказать можно в любой момент),
+    // поэтому экран подробностей для ТВ-карточки недостижим в принципе, а
+    // повторный вход в карточку состояние не перезапрашивает — без этого
+    // пункта обещанное спецификацией ручное обновление у сериала не
+    // работает вовсе, и подписи сезонов замерзают до перезагрузки Lampa.
+    items.push({ title: 'Обновить состояние', action: 'refresh' });
+
     Lampa.Select.show({
       title: 'Какой сезон заказать',
       items: items,
       onSelect: function (item) {
         Lampa.Controller.toggle(back);
+        if (item.action === 'refresh') {
+          refresh(card, btn);
+          return;
+        }
         callback(item.season);
       },
       onBack: function () {
@@ -347,7 +359,7 @@
 
     // Порядок вопросов: сначала «что» (сезон), потом «как» (качество).
     if (card.type === 'tv') {
-      pickSeason(card, status, function (season) {
+      pickSeason(card, status, btn, function (season) {
         pickQuality(card, function (profile) {
           fire(season, profile);
         });

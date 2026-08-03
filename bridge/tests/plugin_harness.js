@@ -127,8 +127,13 @@ function buildEnv(cardJson, method, opts) {
     // и сценарии, которым состояние безразлично, не должны его выдумывать.
     if (url.indexOf('/status') !== -1) {
       calls.fetch.push({ url, body: null });
-      if (opts.status) {
-        return Promise.resolve({ ok: true, json: () => Promise.resolve(opts.status) });
+      // opts.statusAfter — ответ на ВТОРОЙ и последующие запросы. Нужен,
+      // чтобы отличить «обновление перечитало состояние» от «на экране
+      // осталось прежнее»: с одинаковыми ответами это неразличимо.
+      const nth = calls.fetch.filter((c) => c.url.indexOf('/status') !== -1).length;
+      const body = nth > 1 && opts.statusAfter ? opts.statusAfter : opts.status;
+      if (body) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
       }
       return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
     }
@@ -251,10 +256,14 @@ console.log('== Сериал: сначала сезон, потом качест
   check('первым спрошен сезон', env.calls.select.length === 1 && env.calls.select[0].title.indexOf('сезон') !== -1,
     env.calls.select[0] && env.calls.select[0].title);
 
-  const seasons = env.calls.select[0].items.map((i) => i.season);
+  const seasons = env.calls.select[0].items
+    .filter((i) => typeof i.season === 'number')
+    .map((i) => i.season);
   const expected = tv.seasons.filter((s) => s.episode_count > 0).map((s) => s.season_number);
   check('сезоны совпали с данными карточки', JSON.stringify(seasons) === JSON.stringify(expected),
     'плагин: ' + JSON.stringify(seasons) + '  данные: ' + JSON.stringify(expected));
+  check('в списке сезонов есть «Обновить»',
+    env.calls.select[0].items.filter((i) => i.action === 'refresh').length === 1);
 
   env.calls.select[0].onSelect({ season: 2 });
   await tick();
@@ -354,8 +363,66 @@ async function scenarioReopenCard() {
   console.log('status-requests=' + statusRequests);
 }
 
+// У сериала can_order всегда true — экран подробностей с пунктом «Обновить»
+// для ТВ-карточки недостижим, поэтому обновление обязано быть в списке
+// сезонов. Проверяется, что оно там есть, перечитывает состояние, переписывает
+// кнопку и НЕ отправляет заказ.
+async function scenarioSeriesRefresh() {
+  const status = {
+    state: 'waiting',
+    label: 'Сезон 2: заказан, поиск ещё не запускался',
+    detail: null,
+    can_order: true,
+    seasons: [
+      { season: 1, state: 'not_ordered', label: 'не заказан' },
+      { season: 2, state: 'waiting', label: 'заказан, поиск ещё не запускался' }
+    ]
+  };
+  const statusAfter = {
+    state: 'downloading',
+    label: 'Сезон 2: закачивается 44%',
+    detail: null,
+    can_order: true,
+    seasons: [
+      { season: 1, state: 'not_ordered', label: 'не заказан' },
+      { season: 2, state: 'downloading', label: 'закачивается 44%' }
+    ]
+  };
+  const env = buildEnv(tv, 'tv', { status, statusAfter });
+  env.fireFull(env.event);
+  await tick();
+
+  const btn = env.root.children[env.root.children.length - 1];
+  btn.handlers['hover:enter']();
+  await tick();
+
+  const list = env.calls.select[0];
+  const refreshItems = list.items.filter((i) => i.action === 'refresh');
+  console.log('refresh-items=' + refreshItems.length);
+  console.log('season-items=' + list.items.filter((i) => typeof i.season === 'number').length);
+
+  list.onSelect(refreshItems[0]);
+  await tick();
+
+  console.log(
+    'status-requests=' + env.calls.fetch.filter((c) => c.url.indexOf('/status') !== -1).length
+  );
+  console.log('orders=' + env.calls.fetch.filter((c) => c.body).length);
+  console.log('button=' + btn.find('span').text());
+
+  // Состояние сохранено на кнопке — следующий вход в список сезонов покажет
+  // свежие подписи, а не те, что пришли при открытии карточки.
+  btn.handlers['hover:enter']();
+  await tick();
+  const again = env.calls.select[env.calls.select.length - 1];
+  const season2 = again.items.filter((i) => i.season === 2)[0];
+  console.log('season-2-label=' + season2.title);
+}
+
 const scenario = process.argv[2];
-if (scenario === 'status-request') {
+if (scenario === 'series-refresh') {
+  scenarioSeriesRefresh();
+} else if (scenario === 'status-request') {
   scenarioStatusRequest();
 } else if (scenario === 'status-label') {
   scenarioStatusLabel();
