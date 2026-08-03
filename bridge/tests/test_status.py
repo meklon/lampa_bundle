@@ -1,8 +1,8 @@
 """Машина состояний заказа.
 
 Проверяется таблицей, а не отдельными случаями: состояний девять у фильма и
-десять у сезона, и почти все различаются одним полем. Формы ответов взяты из
-recorded/, записанных с живого стека.
+десять у сезона, и почти все различаются одним полем. Структуры полей взяты из
+openapi-схем Radarr и Sonarr, конкретные значения подставлены в фикстурах теста.
 """
 
 from app.status import ItemStatus, movie_status
@@ -137,3 +137,69 @@ def test_can_order_only_when_nothing_in_flight():
 def test_item_status_is_frozen():
     s = movie_status(None, [], [])
     assert isinstance(s, ItemStatus)
+
+
+def test_downloading_without_timeleft():
+    """timeleft может быть None, это штатный случай. Не писать None в интерфейс."""
+    s = movie_status(_movie(), [_queue_record(timeleft=None)], [])
+    assert s.state == "downloading"
+    assert "None" not in (s.label or "")
+    assert "None" not in (s.detail or "")
+
+
+def test_downloading_with_only_time_left():
+    """Если timeleft есть, а title нет, писать только остаток времени."""
+    s = movie_status(_movie(), [_queue_record(timeleft="00:10:00", title="")], [])
+    assert s.state == "downloading"
+    assert "осталось 00:10:00" in (s.detail or "")
+    assert "·" not in (s.detail or "")
+
+
+def test_can_order_respects_busy_states():
+    """can_order = False только для состояний из _BUSY."""
+    # Состояния из _BUSY должны иметь can_order=False
+    assert movie_status(_movie(), [], [_search_command([5])]).can_order is False  # searching
+    assert movie_status(_movie(), [_queue_record()], []).can_order is False  # downloading
+    assert (
+        movie_status(_movie(), [_queue_record(trackedDownloadState="importPending")], []).can_order
+        is False
+    )  # importing
+    assert (
+        movie_status(_movie(), [_queue_record(errorMessage="error")], []).can_order is False
+    )  # stuck
+    assert (
+        movie_status(
+            _movie(hasFile=True, movieFile={"quality": {"quality": {"name": "HD"}}}), [], []
+        ).can_order
+        is False
+    )  # in_library
+
+    # Остальные состояния должны иметь can_order=True
+    assert movie_status(None, [], []).can_order is True  # not_ordered
+    assert movie_status(_movie(monitored=False), [], []).can_order is True  # unmonitored
+    assert (
+        movie_status(_movie(lastSearchTime="2026-08-02T13:39:54Z"), [], []).can_order is True
+    )  # not_found
+    assert movie_status(_movie(), [], []).can_order is True  # waiting
+
+
+def test_queued_search_command_counts_as_searching():
+    """Команда в статусе queued считается активной поиской, как и started."""
+    s = movie_status(_movie(), [], [_search_command([5], status="queued")])
+    assert s.state == "searching"
+    assert s.can_order is False
+
+
+def test_import_pending_shows_as_importing():
+    """importPending — это идущий импорт."""
+    s = movie_status(_movie(), [_queue_record(trackedDownloadState="importPending")], [])
+    assert s.state == "importing"
+    assert s.label == "Импортируется"
+
+
+def test_import_blocked_shows_as_stuck():
+    """importBlocked — это заблокированный импорт, состояние stuck."""
+    s = movie_status(_movie(), [_queue_record(trackedDownloadState="importBlocked")], [])
+    assert s.state == "stuck"
+    assert "заблокирован" in s.label.lower()
+    assert s.can_order is False

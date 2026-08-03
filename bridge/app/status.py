@@ -35,6 +35,11 @@ class ItemStatus:
 _BUSY = {"searching", "stuck", "importing", "downloading", "in_library"}
 
 
+def _can_order(state: str) -> bool:
+    """Можно ли заказать при данном состоянии."""
+    return state not in _BUSY
+
+
 def _percent(size: int, sizeleft: int) -> int:
     if not size:
         return 0
@@ -71,9 +76,10 @@ def _running_search(commands: list[dict], key: str, value: object) -> bool:
 
     Это ФАКТ, прочитанный у Radarr, а не вывод по косвенным признакам:
     /api/v3/command отдаёт body.movieIds и status. Проверено на живом стенде.
+    Команда считается активной в статусах queued и started.
     """
     for c in commands:
-        if c.get("status") != "started":
+        if c.get("status") not in ("started", "queued"):
             continue
         body = c.get("body") or {}
         found = body.get(key)
@@ -108,34 +114,54 @@ def _quality_name(movie: dict) -> str | None:
 def movie_status(movie: dict | None, queue: list[dict], commands: list[dict]) -> ItemStatus:
     """Состояние фильма. Порядок проверок обязателен, см. спецификацию."""
     if movie is None:
-        return ItemStatus(state="not_ordered", label="Заказать", can_order=True)
+        state = "not_ordered"
+        return ItemStatus(state=state, label="Заказать", can_order=_can_order(state))
 
     movie_id = movie.get("id")
 
     if _running_search(commands, "movieIds", movie_id):
-        return ItemStatus(state="searching", label="Ищется релиз…", can_order=False)
+        state = "searching"
+        return ItemStatus(state=state, label="Ищется релиз…", can_order=_can_order(state))
 
     mine = [r for r in queue if r.get("movieId") == movie_id]
     for record in mine:
         if _is_stuck(record):
+            state = "stuck"
             return ItemStatus(
-                state="stuck",
+                state=state,
                 label="Загрузка застряла",
                 detail=_stuck_detail(record),
-                can_order=False,
+                can_order=_can_order(state),
             )
     for record in mine:
-        if str(record.get("trackedDownloadState", "")).startswith("import"):
-            return ItemStatus(state="importing", label="Импортируется", can_order=False)
+        download_state = str(record.get("trackedDownloadState", ""))
+        if download_state.startswith("importBlocked"):
+            state = "stuck"
+            return ItemStatus(
+                state=state,
+                label="Импорт заблокирован",
+                detail="Файл не может быть импортирован",
+                can_order=_can_order(state),
+            )
+        if download_state.startswith("importPending"):
+            state = "importing"
+            return ItemStatus(state=state, label="Импортируется", can_order=_can_order(state))
     for record in mine:
         pct = _percent(record.get("size") or 0, record.get("sizeleft") or 0)
+        parts = []
         left = record.get("timeleft")
-        detail = f"осталось {left} · {record.get('title', '')}".strip(" ·")
+        if left:
+            parts.append(f"осталось {left}")
+        title = record.get("title", "")
+        if title:
+            parts.append(title)
+        detail = " · ".join(parts) if parts else None
+        state = "downloading"
         return ItemStatus(
-            state="downloading",
+            state=state,
             label=f"Закачивается {pct}%",
-            detail=detail or None,
-            can_order=False,
+            detail=detail,
+            can_order=_can_order(state),
         )
 
     if movie.get("hasFile"):
@@ -144,27 +170,31 @@ def movie_status(movie: dict | None, queue: list[dict], commands: list[dict]) ->
         label = "В библиотеке"
         if quality:
             label += f" · {quality}"
-        return ItemStatus(state="in_library", label=f"{label} · {size}", can_order=False)
+        state = "in_library"
+        return ItemStatus(state=state, label=f"{label} · {size}", can_order=_can_order(state))
 
     if not movie.get("monitored"):
+        state = "unmonitored"
         return ItemStatus(
-            state="unmonitored",
+            state=state,
             label="Снят с наблюдения",
             detail="Radarr не будет его искать",
-            can_order=True,
+            can_order=_can_order(state),
         )
 
     last = movie.get("lastSearchTime")
     if last:
+        state = "not_found"
         return ItemStatus(
-            state="not_found",
+            state=state,
             label=f"При поиске в {search_time(last)} подходящих релизов не нашлось",
             detail="Можно заказать снова или изменить профиль качества",
-            can_order=True,
+            can_order=_can_order(state),
         )
 
+    state = "waiting"
     return ItemStatus(
-        state="waiting",
+        state=state,
         label="Заказан, поиск ещё не запускался",
-        can_order=True,
+        can_order=_can_order(state),
     )
