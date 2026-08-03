@@ -253,9 +253,15 @@ def test_unmonitored_beats_not_found():
 
 
 def test_not_found_when_searched_and_nothing_came():
-    s = movie_status(_movie(lastSearchTime="2026-08-02T13:39:54Z"), [], [])
+    """Метка утверждает, что время поиска попало в label — не какое именно
+    время суток: срез строки давал «13:39» всегда, а честная проверка обязана
+    сверяться с search_time(...), а не с зашитым поясом машины, на которой
+    запущен тест (см. test_search_time_converts_utc_to_local — перевод из
+    UTC проверяется там)."""
+    last = "2026-08-02T13:39:54Z"
+    s = movie_status(_movie(lastSearchTime=last), [], [])
     assert s.state == "not_found"
-    assert "13:39" in s.label
+    assert search_time(last) in s.label
 
 
 def test_waiting_when_never_searched():
