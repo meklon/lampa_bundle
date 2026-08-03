@@ -30,8 +30,8 @@
 
 ```bash
 mkdir -p /opt/media-stack && cd /opt/media-stack
-curl -O https://raw.githubusercontent.com/meklon/lampa_bundle/v1.0.1/docker-compose.yml
-curl -o .env https://raw.githubusercontent.com/meklon/lampa_bundle/v1.0.1/.env.example
+curl -O https://raw.githubusercontent.com/meklon/lampa_bundle/v1.1.0/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/meklon/lampa_bundle/v1.1.0/.env.example
 # заполнить .env
 docker compose up -d
 ```
