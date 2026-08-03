@@ -11,7 +11,7 @@ RC=0
 # 08 идёт последним по номеру, но аргументов не требует и потому здесь:
 # нумерация файлов следует за этапами, а этот список — за наличием аргументов.
 for c in 01-containers.sh 02-data-layout.sh 03-prowlarr-sync.sh 04-hardlink.sh \
-         08-qbt-savepath.sh; do
+         08-qbt-savepath.sh 09-status.sh; do
   echo
   echo "############ $c"
   bash "./$c" || RC=1
