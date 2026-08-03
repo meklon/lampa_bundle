@@ -122,28 +122,39 @@ else
       | jq -r --argjson s "$SEASON" '.seasons[]|select(.season==$s)|.state')"
     info "состояние сезона $SEASON до вмешательства: $BEFORE"
 
-    BREAK_CODE="$(set_monitoring "$IDS" false)"
-    case "$BREAK_CODE" in
-      2*) ;;
-      *) info "Sonarr ответил $BREAK_CODE на снятие мониторинга" ;;
-    esac
-
-    GOT="$(wait_state "$SEASON" monitoring_broken)"
-    assert_eq "сломанный мониторинг показан" monitoring_broken "$GOT"
-    if [ "$GOT" != monitoring_broken ]; then
-      info "Это отказ восьмого этапа: сезон отслеживается, эпизоды нет,"
-      info "поиск находит релизы и не берёт ни одного. Он обязан быть видимым."
-    fi
-
-    if restore_monitoring; then
+    if [ -z "$BEFORE" ]; then
+      # Пустой BEFORE — это отказ первичного запроса (bridge недоступен,
+      # Sonarr не ответил), а не «состояние совпало». wait_state "$SEASON" ""
+      # вернулась бы немедленно, а assert_eq "" "" напечатал бы [ok], молча
+      # соврав об успешном восстановлении — того самого класса враньё,
+      # против которого написана вся проверка. Мутировать стенд, не зная
+      # исходного состояния, тоже нельзя: не с чем будет сверить восстановление.
+      bad "не удалось получить состояние сезона $SEASON до вмешательства — мутация Sonarr пропущена"
       trap - EXIT
-      RESTORED="$(wait_state "$SEASON" "$BEFORE")"
-      assert_eq "состояние восстановлено" "$BEFORE" "$RESTORED"
     else
-      # trap НЕ снимается: при выходе будет ещё одна попытка вернуть
-      # мониторинг. Проверка при этом провалена — стенд трогать без
-      # восстановления нельзя.
-      bad "мониторинг эпизодов не восстановлен, см. команду выше"
+      BREAK_CODE="$(set_monitoring "$IDS" false)"
+      case "$BREAK_CODE" in
+        2*) ;;
+        *) info "Sonarr ответил $BREAK_CODE на снятие мониторинга" ;;
+      esac
+
+      GOT="$(wait_state "$SEASON" monitoring_broken)"
+      assert_eq "сломанный мониторинг показан" monitoring_broken "$GOT"
+      if [ "$GOT" != monitoring_broken ]; then
+        info "Это отказ восьмого этапа: сезон отслеживается, эпизоды нет,"
+        info "поиск находит релизы и не берёт ни одного. Он обязан быть видимым."
+      fi
+
+      if restore_monitoring; then
+        trap - EXIT
+        RESTORED="$(wait_state "$SEASON" "$BEFORE")"
+        assert_eq "состояние восстановлено" "$BEFORE" "$RESTORED"
+      else
+        # trap НЕ снимается: при выходе будет ещё одна попытка вернуть
+        # мониторинг. Проверка при этом провалена — стенд трогать без
+        # восстановления нельзя.
+        bad "мониторинг эпизодов не восстановлен, см. команду выше"
+      fi
     fi
   fi
 fi
