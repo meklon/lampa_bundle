@@ -40,3 +40,26 @@ class Profile(BaseModel):
     name: str
     # Умолчание из окружения — плагин ставит его первым в списке.
     default: bool = False
+
+
+class SeasonStatusModel(BaseModel):
+    """Состояние одного сезона для списка выбора в плагине."""
+
+    season: int
+    state: str
+    label: str
+
+
+class StatusResponse(BaseModel):
+    """Текущее состояние заказа.
+
+    `state` — машинное, для единственного решения плагина: рисовать «Заказать»
+    или нет. `label` и `detail` — готовый текст: формулировки живут в Python,
+    потому что там на них есть тест.
+    """
+
+    state: str
+    label: str
+    detail: str | None = None
+    can_order: bool = True
+    seasons: list[SeasonStatusModel] | None = None

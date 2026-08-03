@@ -1,0 +1,28 @@
+{
+  "name": "RefreshMovie",
+  "commandName": "Refresh Movie",
+  "body": {
+    "movieIds": [
+      5
+    ],
+    "isNewMovie": false,
+    "sendUpdatesToClient": true,
+    "updateScheduledTask": false,
+    "isLongRunning": true,
+    "completionMessage": "Completed",
+    "requiresDiskAccess": false,
+    "isExclusive": false,
+    "isTypeExclusive": false,
+    "name": "RefreshMovie",
+    "trigger": "manual",
+    "suppressMessages": false
+  },
+  "priority": "normal",
+  "status": "queued",
+  "result": "unknown",
+  "queued": "2026-08-03T02:08:28Z",
+  "trigger": "manual",
+  "sendUpdatesToClient": true,
+  "updateScheduledTask": false,
+  "id": 1381
+}

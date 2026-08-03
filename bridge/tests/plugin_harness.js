@@ -39,12 +39,37 @@ function makeNode(html) {
     html: html || '',
     children: [],
     handlers: {},
+    stored: {},
     length: 1,
     on(event, fn) {
       this.handlers[event] = fn;
       return this;
     },
+    // .data() — как в jQuery: без второго аргумента геттер, с ним сеттер.
+    // Плагин хранит здесь состояние заказа между 'complite' и hover:enter.
+    data(key, val) {
+      if (val === undefined) return this.stored[key];
+      this.stored[key] = val;
+      return this;
+    },
     find(selector) {
+      // 'span' — не дочерний узел, а текст внутри самой кнопки (как в
+      // разметке plugin.js). Отдельная ветка, а не элемент children, потому
+      // что реальная кнопка тоже создаётся одной строкой html, без DOM.
+      if (selector === 'span') {
+        const self = this;
+        return {
+          length: 1,
+          text(val) {
+            if (val === undefined) {
+              const m = self.html.match(/<span>([^<]*)<\/span>/);
+              return m ? m[1] : '';
+            }
+            self.html = self.html.replace(/<span>[^<]*<\/span>/, '<span>' + val + '</span>');
+            return this;
+          }
+        };
+      }
       const hits = this.children.filter((c) => c.html.indexOf(selector.replace('.', '')) !== -1);
       const res = hits.length ? hits[0] : makeNode('');
       res.length = hits.length;
@@ -97,6 +122,21 @@ function buildEnv(cardJson, method, opts) {
   global.$ = (html) => makeNode(html);
 
   global.fetch = (url, init) => {
+    // GET /status — состояние заказа. По умолчанию отдаём «не ответил»
+    // (ok: false): именно так ведёт себя bridge при отказе Radarr/Sonarr,
+    // и сценарии, которым состояние безразлично, не должны его выдумывать.
+    if (url.indexOf('/status') !== -1) {
+      calls.fetch.push({ url, body: null });
+      // opts.statusAfter — ответ на ВТОРОЙ и последующие запросы. Нужен,
+      // чтобы отличить «обновление перечитало состояние» от «на экране
+      // осталось прежнее»: с одинаковыми ответами это неразличимо.
+      const nth = calls.fetch.filter((c) => c.url.indexOf('/status') !== -1).length;
+      const body = nth > 1 && opts.statusAfter ? opts.statusAfter : opts.status;
+      if (body) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
+      }
+      return Promise.resolve({ ok: false, json: () => Promise.resolve(null) });
+    }
     // GET /profiles — список профилей качества. Отдаём тот же набор, что
     // стоит в Radarr и Sonarr по умолчанию, с отметкой умолчания.
     if (url.indexOf('/profiles') !== -1) {
@@ -216,10 +256,14 @@ console.log('== Сериал: сначала сезон, потом качест
   check('первым спрошен сезон', env.calls.select.length === 1 && env.calls.select[0].title.indexOf('сезон') !== -1,
     env.calls.select[0] && env.calls.select[0].title);
 
-  const seasons = env.calls.select[0].items.map((i) => i.season);
+  const seasons = env.calls.select[0].items
+    .filter((i) => typeof i.season === 'number')
+    .map((i) => i.season);
   const expected = tv.seasons.filter((s) => s.episode_count > 0).map((s) => s.season_number);
   check('сезоны совпали с данными карточки', JSON.stringify(seasons) === JSON.stringify(expected),
     'плагин: ' + JSON.stringify(seasons) + '  данные: ' + JSON.stringify(expected));
+  check('в списке сезонов есть «Обновить»',
+    env.calls.select[0].items.filter((i) => i.action === 'refresh').length === 1);
 
   env.calls.select[0].onSelect({ season: 2 });
   await tick();
@@ -273,4 +317,117 @@ if (failures) {
 console.log('ИТОГ: прошло');
 }
 
-main();
+// --------------------------------------------------------------------------
+// Отдельные сценарии для pytest: каждый проверяет одну вещь и печатает то,
+// что нужно найти в stdout, — без карточек check(), в отличие от main().
+// --------------------------------------------------------------------------
+
+// Карточка минимальна: для проверки состояния не нужны ни постеры, ни сезоны,
+// а tmdb_id взят так, чтобы не совпасть ни с одним фиктивным id из recorded/.
+const statusCard = { id: 1083381, title: 'Тест' };
+
+async function scenarioStatusRequest() {
+  const env = buildEnv(statusCard, 'movie');
+  env.fireFull(env.event);
+  await tick();
+  console.log(env.calls.fetch[0].url);
+}
+
+async function scenarioStatusLabel() {
+  const status = {
+    state: 'downloading',
+    label: 'Закачивается 44%',
+    detail: null,
+    can_order: false
+  };
+  const env = buildEnv(statusCard, 'movie', { status });
+  env.fireFull(env.event);
+  await tick();
+  const btn = env.root.children[env.root.children.length - 1];
+  console.log(btn.html);
+}
+
+// 'complite' приходит и при возврате в карточку (см. addButton), не только
+// при первом открытии. Ранний return по найденной кнопке обязан гасить не
+// только повторную кнопку, но и повторный запрос /status — иначе при
+// каждом возврате в карточку копился бы ещё один fetch.
+async function scenarioReopenCard() {
+  const env = buildEnv(statusCard, 'movie');
+  env.fireFull(env.event);
+  await tick();
+  env.fireFull(env.event);
+  await tick();
+  const buttons = env.root.find('.view--order').length;
+  const statusRequests = env.calls.fetch.filter((c) => c.url.indexOf('/status') !== -1).length;
+  console.log('buttons=' + buttons);
+  console.log('status-requests=' + statusRequests);
+}
+
+// У сериала can_order всегда true — экран подробностей с пунктом «Обновить»
+// для ТВ-карточки недостижим, поэтому обновление обязано быть в списке
+// сезонов. Проверяется, что оно там есть, перечитывает состояние, переписывает
+// кнопку и НЕ отправляет заказ.
+async function scenarioSeriesRefresh() {
+  const status = {
+    state: 'waiting',
+    label: 'Сезон 2: заказан, поиск ещё не запускался',
+    detail: null,
+    can_order: true,
+    seasons: [
+      { season: 1, state: 'not_ordered', label: 'не заказан' },
+      { season: 2, state: 'waiting', label: 'заказан, поиск ещё не запускался' }
+    ]
+  };
+  const statusAfter = {
+    state: 'downloading',
+    label: 'Сезон 2: закачивается 44%',
+    detail: null,
+    can_order: true,
+    seasons: [
+      { season: 1, state: 'not_ordered', label: 'не заказан' },
+      { season: 2, state: 'downloading', label: 'закачивается 44%' }
+    ]
+  };
+  const env = buildEnv(tv, 'tv', { status, statusAfter });
+  env.fireFull(env.event);
+  await tick();
+
+  const btn = env.root.children[env.root.children.length - 1];
+  btn.handlers['hover:enter']();
+  await tick();
+
+  const list = env.calls.select[0];
+  const refreshItems = list.items.filter((i) => i.action === 'refresh');
+  console.log('refresh-items=' + refreshItems.length);
+  console.log('season-items=' + list.items.filter((i) => typeof i.season === 'number').length);
+
+  list.onSelect(refreshItems[0]);
+  await tick();
+
+  console.log(
+    'status-requests=' + env.calls.fetch.filter((c) => c.url.indexOf('/status') !== -1).length
+  );
+  console.log('orders=' + env.calls.fetch.filter((c) => c.body).length);
+  console.log('button=' + btn.find('span').text());
+
+  // Состояние сохранено на кнопке — следующий вход в список сезонов покажет
+  // свежие подписи, а не те, что пришли при открытии карточки.
+  btn.handlers['hover:enter']();
+  await tick();
+  const again = env.calls.select[env.calls.select.length - 1];
+  const season2 = again.items.filter((i) => i.season === 2)[0];
+  console.log('season-2-label=' + season2.title);
+}
+
+const scenario = process.argv[2];
+if (scenario === 'series-refresh') {
+  scenarioSeriesRefresh();
+} else if (scenario === 'status-request') {
+  scenarioStatusRequest();
+} else if (scenario === 'status-label') {
+  scenarioStatusLabel();
+} else if (scenario === 'reopen-card') {
+  scenarioReopenCard();
+} else {
+  main();
+}
