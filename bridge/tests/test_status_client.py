@@ -50,3 +50,47 @@ async def test_queue_failure_raises_not_empty_list():
     async with _client(lambda r: httpx.Response(500, text="boom")) as c:
         with pytest.raises(UpstreamUnavailable):
             await Radarr(c).queue()
+
+
+@pytest.mark.asyncio
+async def test_radarr_queue_truncation_logged(caplog):
+    """Потеря хвоста очереди обязана быть видна в логе.
+
+    pageSize=200 — фиксированная, а может быть более 200 записей. Молчаливое
+    усечение неприемлемо.
+    """
+    truncated_page = {
+        "page": 1,
+        "pageSize": 200,
+        "totalRecords": 350,  # больше, чем records
+        "records": [{"id": i} for i in range(200)],
+    }
+    async with _client(lambda r: httpx.Response(200, json=truncated_page)) as c:
+        result = await Radarr(c).queue()
+        assert len(result) == 200
+        assert len(result) < truncated_page["totalRecords"]
+        assert any(
+            "получено 200 записей, но всего 350" in record.message
+            for record in caplog.records
+            if record.levelname == "WARNING"
+        )
+
+
+@pytest.mark.asyncio
+async def test_sonarr_queue_truncation_logged(caplog):
+    """То же для Sonarr."""
+    truncated_page = {
+        "page": 1,
+        "pageSize": 200,
+        "totalRecords": 500,
+        "records": [{"id": i} for i in range(200)],
+    }
+    async with _client(lambda r: httpx.Response(200, json=truncated_page)) as c:
+        result = await Sonarr(c).queue()
+        assert len(result) == 200
+        assert len(result) < truncated_page["totalRecords"]
+        assert any(
+            "получено 200 записей, но всего 500" in record.message
+            for record in caplog.records
+            if record.levelname == "WARNING"
+        )

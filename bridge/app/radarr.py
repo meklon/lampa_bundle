@@ -6,6 +6,8 @@ production-сборках этого пути нет. Схема лежит в �
 src/Radarr.Api.V3/openapi.json.
 """
 
+import logging
+
 import httpx
 
 from .config import settings
@@ -16,6 +18,8 @@ from .errors import (
     UpstreamAuth,
     UpstreamUnavailable,
 )
+
+log = logging.getLogger(__name__)
 
 
 class Radarr:
@@ -210,12 +214,23 @@ class Radarr:
         `/api/v3/queue` отдаёт СТРАНИЦУ, а не массив: объект с page, pageSize,
         totalRecords и records. Вернуть его как есть значило бы получить
         пустую очередь при непустой — молча.
+
+        Если записей больше pageSize, может быть потеря хвоста. Это логируется:
+        потеря молчаливая неприемлема.
         """
         r = await self._request("GET", "/queue?pageSize=200")
         if r.status_code >= 400:
             raise UpstreamUnavailable(f"Radarr /queue вернул {r.status_code}")
         data = r.json() or {}
-        return list(data.get("records") or [])
+        records = list(data.get("records") or [])
+        total = data.get("totalRecords", len(records))
+        if len(records) < total:
+            log.warning(
+                "Radarr /queue: получено %d записей, но всего %d — очередь усеченa",
+                len(records),
+                total,
+            )
+        return records
 
     async def commands(self) -> list[dict]:
         """Команды Radarr. Нужны, чтобы отличить «идёт поиск» от «искали и не
