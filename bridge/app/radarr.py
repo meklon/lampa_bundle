@@ -201,3 +201,27 @@ class Radarr:
                 f"Radarr отказал при добавлении: {r.status_code} {r.text[:300]}"
             )
         return r.json()
+
+    # -- чтение текущего состояния -------------------------------------------
+
+    async def queue(self) -> list[dict]:
+        """Записи очереди загрузки.
+
+        `/api/v3/queue` отдаёт СТРАНИЦУ, а не массив: объект с page, pageSize,
+        totalRecords и records. Вернуть его как есть значило бы получить
+        пустую очередь при непустой — молча.
+        """
+        r = await self._request("GET", "/queue?pageSize=200")
+        if r.status_code >= 400:
+            raise UpstreamUnavailable(f"Radarr /queue вернул {r.status_code}")
+        data = r.json() or {}
+        return list(data.get("records") or [])
+
+    async def commands(self) -> list[dict]:
+        """Команды Radarr. Нужны, чтобы отличить «идёт поиск» от «искали и не
+        нашли»: body.movieIds и status — факт, а не вывод по косвенным
+        признакам."""
+        r = await self._request("GET", "/command")
+        if r.status_code >= 400:
+            raise UpstreamUnavailable(f"Radarr /command вернул {r.status_code}")
+        return list(r.json() or [])

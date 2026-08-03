@@ -462,3 +462,20 @@ class Sonarr:
             raise UpstreamUnavailable(
                 f"Sonarr отказал при запуске поиска: {r.status_code} {r.text[:300]}"
             )
+
+    # -- чтение текущего состояния -------------------------------------------
+
+    async def queue(self) -> list[dict]:
+        """Записи очереди загрузки. См. Radarr.queue: /queue отдаёт страницу."""
+        r = await self._request("GET", "/queue?pageSize=200&includeEpisode=true")
+        if r.status_code >= 400:
+            raise UpstreamUnavailable(f"Sonarr /queue вернул {r.status_code}")
+        data = r.json() or {}
+        return list(data.get("records") or [])
+
+    async def commands(self) -> list[dict]:
+        """Команды Sonarr: нужны для состояния «идёт поиск сезона»."""
+        r = await self._request("GET", "/command")
+        if r.status_code >= 400:
+            raise UpstreamUnavailable(f"Sonarr /command вернул {r.status_code}")
+        return list(r.json() or [])
